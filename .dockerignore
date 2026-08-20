@@ -1,0 +1,8 @@
+# El .venv son ~6400 archivos: sin esto se mandan enteros al daemon en cada build.
+.venv/
+__pycache__/
+*.py[cod]
+.env
+outputs/
+scripts/
+.git/

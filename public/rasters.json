@@ -1,0 +1,6 @@
+[
+  {
+    "label": "NDVI Rancho Demo 2026-06-22",
+    "url": "s3://raster-cogs/rancho-demo/2026-06-22/download.NDVI_cog.tif"
+  }
+]

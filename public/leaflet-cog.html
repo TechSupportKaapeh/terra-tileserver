@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Terra IO | Raster Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root {
+            color-scheme: dark;
+            --glass: rgba(10, 16, 24, 0.72);
+            --glass-strong: rgba(10, 16, 24, 0.86);
+            --stroke: rgba(255, 255, 255, 0.10);
+            --stroke-strong: rgba(255, 255, 255, 0.16);
+            --text: #eff6ff;
+            --muted: #a5b6ca;
+            --accent: #58e1b8;
+            --accent-2: #7ad7ff;
+            --warning: #ffd166;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at 10% 10%, rgba(122, 215, 255, 0.16), transparent 26%),
+                radial-gradient(circle at 90% 30%, rgba(88, 225, 184, 0.10), transparent 22%),
+                linear-gradient(135deg, #05111a 0%, #0a1721 46%, #041018 100%);
+        }
+
+        #map {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background: #09131d;
+        }
+
+        .layout {
+            position: absolute;
+            inset: 14px 14px 14px;
+            z-index: 1100;
+            pointer-events: none;
+        }
+
+        .sidebar {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: min(328px, calc(100vw - 28px));
+            padding: 16px;
+            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(10, 16, 24, 0.58);
+            backdrop-filter: blur(18px) saturate(1.1);
+            box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
+            color: var(--text);
+            pointer-events: auto;
+        }
+
+        .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.22em;
+            font-size: 10px;
+            color: var(--muted);
+            margin-bottom: 8px;
+        }
+
+        .sidebar h1 {
+            margin: 0 0 8px;
+            font-size: 18px;
+            line-height: 1.1;
+        }
+
+        .sidebar p {
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .mini-card {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--stroke);
+            margin-bottom: 14px;
+        }
+
+        .mini-card .value {
+            font-size: 16px;
+            font-weight: 800;
+        }
+
+        .mini-card .sub {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .badge {
+            align-self: center;
+            justify-self: end;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(88, 225, 184, 0.14);
+            color: var(--accent);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .field-group {
+            display: grid;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .field-label {
+            color: var(--muted);
+            font-size: 10px;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+        }
+
+        select, input, button {
+            width: 100%;
+            box-sizing: border-box;
+            border-radius: 12px;
+            border: 1px solid var(--stroke-strong);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            font: inherit;
+            padding: 11px 12px;
+            outline: none;
+        }
+
+        select:focus, input:focus {
+            border-color: rgba(122, 215, 255, 0.55);
+            box-shadow: 0 0 0 3px rgba(122, 215, 255, 0.14);
+        }
+
+        button {
+            cursor: pointer;
+            border: none;
+            background: linear-gradient(135deg, rgba(122, 215, 255, 1), rgba(88, 225, 184, 1));
+            color: #04111a;
+            font-weight: 800;
+        }
+
+        .status {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--stroke);
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .status strong {
+            color: var(--text);
+        }
+
+        .summary-card, .legend-card {
+            padding: 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(10, 16, 24, 0.58);
+            backdrop-filter: blur(18px) saturate(1.1);
+            box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
+            color: var(--text);
+        }
+
+        .info-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .info-head h2 {
+            margin: 0;
+            font-size: 15px;
+        }
+
+        .chip {
+            padding: 5px 9px;
+            border-radius: 999px;
+            background: rgba(122, 215, 255, 0.14);
+            color: var(--accent-2);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+        }
+
+        .stat {
+            min-height: 66px;
+            padding: 10px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--stroke);
+        }
+
+        .stat .label {
+            color: var(--muted);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            margin-bottom: 8px;
+        }
+
+        .stat .value {
+            font-size: 14px;
+            font-weight: 800;
+        }
+
+        .legend-card h3 {
+            margin: 0 0 4px;
+            font-size: 15px;
+        }
+
+        .legend-card p {
+            margin: 0 0 12px;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .legend-item {
+            display: grid;
+            grid-template-columns: 16px 1fr auto;
+            gap: 10px;
+            align-items: center;
+            padding: 7px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            font-size: 12px;
+        }
+
+        .swatch {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+        }
+
+        .swatch.low { background: #6d3d12; }
+        .swatch.midlow { background: #d7bf83; }
+        .swatch.mid { background: #ffd21f; }
+        .swatch.midhigh { background: #35a348; }
+        .swatch.high { background: #0e7a34; }
+
+        .leaflet-container { background: #09131d; }
+
+        .leaflet-control-zoom {
+            border: 1px solid rgba(255, 255, 255, 0.10) !important;
+            overflow: hidden;
+            border-radius: 14px !important;
+            box-shadow: 0 12px 26px rgba(0, 0, 0, 0.18) !important;
+        }
+
+        .leaflet-control-zoom a {
+            background: rgba(10, 16, 24, 0.72) !important;
+            color: var(--text) !important;
+            backdrop-filter: blur(12px);
+        }
+
+        .leaflet-control-zoom a:hover {
+            background: rgba(122, 215, 255, 0.18) !important;
+            color: #ffffff !important;
+        }
+
+        .leaflet-control-attribution {
+            background: rgba(10, 16, 24, 0.42) !important;
+            color: rgba(239, 246, 255, 0.72) !important;
+            border-radius: 10px !important;
+            backdrop-filter: blur(12px);
+        }
+
+        .leaflet-satellite-pane { filter: none; opacity: 1; }
+        .leaflet-ndvi-pane { filter: saturate(1.18) contrast(1.08); }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="eyebrow">TERRA-IO</div>
+            <h1>Gestión satelital</h1>
+            <p>La escena se apoya sobre imagen satelital para mantener el contexto del entorno mientras cargas y comparas el índice.</p>
+
+            <div class="mini-card">
+                <div>
+                    <div class="value" id="currentRasterLabel">Cargando...</div>
+                    <div class="sub" id="currentRasterPath">Esperando catálogo</div>
+                </div>
+                <div class="badge" id="currentRasterZoom">activo</div>
+            </div>
+
+            <div class="field-group">
+                <div class="field-label">Rasters disponibles</div>
+                <select id="rasterSelect"></select>
+            </div>
+
+            <div class="field-group">
+                <div class="field-label">Ruta S3 / MinIO</div>
+                <input id="rasterUrlInput" type="text" spellcheck="false"
+                    placeholder="s3://bucket/ruta/al/archivo.tif" />
+            </div>
+
+            <div class="field-group">
+                <button id="loadRasterButton" type="button">Cargar raster</button>
+            </div>
+
+            <div class="status" id="statusText">Cargando catálogo de rasters...</div>
+
+            <section class="summary-card" style="margin-top: 12px;">
+                <div class="info-head">
+                    <h2>Resumen de la escena</h2>
+                    <div class="chip" id="sceneStateChip">Cargada</div>
+                </div>
+                <div class="stat-grid">
+                    <div class="stat">
+                        <div class="label">Zoom nativo</div>
+                        <div class="value" id="nativeZoomValue">-</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Centro</div>
+                        <div class="value" id="centerValue">-</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Bounds</div>
+                        <div class="value" id="boundsValue">-</div>
+                    </div>
+                    <div class="stat">
+                        <div class="label">Estado</div>
+                        <div class="value" id="layerStateValue">Activo</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="legend-card" style="margin-top: 12px;">
+                <h3>NDVI - Índice de vegetación</h3>
+                <p>El raster se visualiza sobre el entorno satelital para no perder contexto espacial.</p>
+                <div class="legend-item"><span class="swatch low"></span><span>Suelo desnudo / agua</span><span>-1.0 — -0.1</span></div>
+                <div class="legend-item"><span class="swatch midlow"></span><span>Muy escasa</span><span>-0.1 — 0.1</span></div>
+                <div class="legend-item"><span class="swatch mid"></span><span>Escasa</span><span>0.1 — 0.3</span></div>
+                <div class="legend-item"><span class="swatch midhigh"></span><span>Moderada</span><span>0.3 — 0.5</span></div>
+                <div class="legend-item"><span class="swatch high"></span><span>Alta</span><span>0.5 — 1.0</span></div>
+            </section>
+        </aside>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        const rasterSelect      = document.getElementById('rasterSelect');
+        const rasterUrlInput    = document.getElementById('rasterUrlInput');
+        const loadRasterButton  = document.getElementById('loadRasterButton');
+        const statusText        = document.getElementById('statusText');
+        const currentRasterLabel = document.getElementById('currentRasterLabel');
+        const currentRasterPath  = document.getElementById('currentRasterPath');
+        const currentRasterZoom  = document.getElementById('currentRasterZoom');
+        const nativeZoomValue    = document.getElementById('nativeZoomValue');
+        const centerValue        = document.getElementById('centerValue');
+        const boundsValue        = document.getElementById('boundsValue');
+        const layerStateValue    = document.getElementById('layerStateValue');
+
+        const map = L.map('map', {
+            zoomControl: true,
+            preferCanvas: true,
+            zoomSnap: 0.5,
+            zoomDelta: 0.5,
+            minZoom: 3
+        });
+
+        map.attributionControl.setPrefix(false);
+        map.createPane('satellitePane');
+        map.createPane('ndviPane');
+
+        const satellitePane = map.getPane('satellitePane');
+        const ndviPane      = map.getPane('ndviPane');
+        if (satellitePane) {
+            satellitePane.classList.add('leaflet-satellite-pane');
+            satellitePane.style.zIndex = '200';
+        }
+        if (ndviPane) {
+            ndviPane.classList.add('leaflet-ndvi-pane');
+            ndviPane.style.zIndex = '400';
+        }
+
+        L.tileLayer(
+            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            { attribution: 'Tiles © Esri', crossOrigin: true, pane: 'satellitePane' }
+        ).addTo(map);
+
+        let currentTileLayer = null;
+
+        function setStatus(message, emphasis) {
+            statusText.innerHTML = emphasis
+                ? `${message} <strong>${emphasis}</strong>`
+                : message;
+        }
+
+        function setControlsEnabled(enabled) {
+            rasterSelect.disabled    = !enabled;
+            rasterUrlInput.disabled  = !enabled;
+            loadRasterButton.disabled = !enabled;
+        }
+
+        function removeCurrentLayer() {
+            if (currentTileLayer) {
+                map.removeLayer(currentTileLayer);
+                currentTileLayer = null;
+            }
+        }
+
+        function buildTileUrl(rawCogPath) {
+            const encodedCogPath = encodeURIComponent(rawCogPath);
+            return `http://localhost:8000/cog/tiles/WebMercatorQuad/{z}/{x}/{y}?url=${encodedCogPath}&rescale=-1,1&nodata=0&colormap_name=rdylgn`;
+        }
+
+        function updateSceneSummary(info, label, rawCogPath) {
+            const bounds = info.bounds;
+            const center = info.center || [
+                (bounds[0] + bounds[2]) / 2,
+                (bounds[1] + bounds[3]) / 2
+            ];
+            currentRasterLabel.textContent = label || 'Raster activo';
+            currentRasterPath.textContent  = rawCogPath;
+            currentRasterZoom.textContent  = `${info.maxzoom ?? '-'} zoom`;
+            nativeZoomValue.textContent    = String(info.maxzoom ?? '-');
+            centerValue.textContent        = `${center[1].toFixed(4)}, ${center[0].toFixed(4)}`;
+            boundsValue.textContent        = `${bounds[1].toFixed(3)}, ${bounds[0].toFixed(3)}`;
+            layerStateValue.textContent    = info.count
+                ? `${info.count} banda${info.count === 1 ? '' : 's'}`
+                : 'Activo';
+        }
+
+        async function loadRaster(rawCogPath, label) {
+            if (!rawCogPath) {
+                setStatus('Selecciona o escribe una ruta S3 válida.');
+                return;
+            }
+            setControlsEnabled(false);
+            setStatus('Cargando raster...', label || rawCogPath);
+            try {
+                const infoUrl  = `http://localhost:8000/cog/info?url=${encodeURIComponent(rawCogPath)}`;
+                const response = await fetch(infoUrl);
+                if (!response.ok) throw new Error(`TiTiler respondió ${response.status}`);
+
+                const info   = await response.json();
+                const bounds = [
+                    [info.bounds[1], info.bounds[0]],
+                    [info.bounds[3], info.bounds[2]]
+                ];
+
+                removeCurrentLayer();
+                currentTileLayer = L.tileLayer(buildTileUrl(rawCogPath), {
+                    bounds,
+                    noWrap: true,
+                    keepBuffer: 0,
+                    opacity: 0.82,
+                    pane: 'ndviPane',
+                    maxNativeZoom: info.maxzoom ?? 14,
+                    maxZoom: (info.maxzoom ?? 14) + 1,
+                    attribution: 'Terra IO | NDVI Pipeline'
+                }).addTo(map);
+
+                map.fitBounds(bounds, { padding: [40, 40] });
+                map.setMinZoom(Math.max(3, (info.minzoom ?? 3) - 1));
+                updateSceneSummary(info, label || rawCogPath, rawCogPath);
+                setStatus('Raster cargado:', label || rawCogPath);
+            } catch (error) {
+                console.error(error);
+                setStatus('No se pudo cargar el raster:', error.message);
+                layerStateValue.textContent = 'Error';
+            } finally {
+                setControlsEnabled(true);
+            }
+        }
+
+        // ── Catálogo dinámico ──────────────────────────────────────────────────
+        // Intenta primero el endpoint REST del worker (localhost:8001/catalog).
+        // Si no está disponible, cae al archivo estático /static/rasters.json.
+        async function initCatalog() {
+            setControlsEnabled(false);
+            try {
+                let rasters = [];
+                try {
+                    const res = await fetch('http://localhost:8001/catalog');
+                    if (res.ok) {
+                        rasters = await res.json();
+                    } else {
+                        throw new Error(`Worker respondió ${res.status}`);
+                    }
+                } catch (workerError) {
+                    console.warn(
+                        'Catálogo dinámico no disponible, usando rasters.json:',
+                        workerError.message
+                    );
+                    const res = await fetch('/static/rasters.json');
+                    if (!res.ok) throw new Error(`No se pudo leer rasters.json (${res.status})`);
+                    rasters = await res.json();
+                }
+
+                rasterSelect.innerHTML = '';
+                rasters.forEach((item, index) => {
+                    const option = document.createElement('option');
+                    option.value       = item.url;
+                    option.textContent = item.label || item.url;
+                    rasterSelect.appendChild(option);
+                    if (index === 0) rasterUrlInput.value = item.url;
+                });
+
+                if (rasters.length > 0) {
+                    await loadRaster(rasters[0].url, rasters[0].label);
+                } else {
+                    setStatus('No hay rasters disponibles en el catálogo.');
+                }
+            } catch (error) {
+                console.error(error);
+                setStatus('No se pudo cargar el catálogo:', error.message);
+                layerStateValue.textContent = 'Sin catálogo';
+            } finally {
+                setControlsEnabled(true);
+            }
+        }
+
+        rasterSelect.addEventListener('change', () => {
+            rasterUrlInput.value = rasterSelect.value;
+            loadRaster(
+                rasterUrlInput.value.trim(),
+                rasterSelect.options[rasterSelect.selectedIndex]?.textContent
+            );
+        });
+
+        loadRasterButton.addEventListener('click', () => {
+            loadRaster(
+                rasterUrlInput.value.trim(),
+                rasterSelect.options[rasterSelect.selectedIndex]?.textContent
+            );
+        });
+
+        rasterUrlInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                loadRaster(
+                    rasterUrlInput.value.trim(),
+                    rasterSelect.options[rasterSelect.selectedIndex]?.textContent
+                );
+            }
+        });
+
+        initCatalog();
+    </script>
+</body>
+</html>
