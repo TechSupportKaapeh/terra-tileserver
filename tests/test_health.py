@@ -16,6 +16,7 @@ from terra_tiles.health import (
     ERROR,
     OK,
     Comprobacion,
+    comprobar_credenciales,
     comprobar_endpoint,
     comprobar_minio,
     comprobar_token_secret,
@@ -83,6 +84,74 @@ def test_sin_secreto_es_error():
     c = comprobar_token_secret(_settings(map_token_secret=None))
     assert c.estado == ERROR
     assert "MAP_TOKEN_SECRET" in c.detalle
+
+
+# --------------------------------------------------------------------------
+# De dónde salieron las credenciales
+# --------------------------------------------------------------------------
+
+_ENTORNO_COMPLETO = {"MINIO_ACCESS_KEY": "tiler-ro", "MINIO_SECRET_KEY": "s3cr3to"}
+
+
+def test_credenciales_del_entorno_son_ok():
+    c = comprobar_credenciales(_settings(), _ENTORNO_COMPLETO)
+    assert c.estado == OK
+
+
+def test_credenciales_por_defecto_avisan():
+    """Un nombre de variable mal escrito se disfraza de error de permisos.
+
+    `Settings.from_env` cae a 'minioadmin' sin decir nada, y el AccessDenied que
+    sale después manda a revisar la policy, donde no hay nada malo.
+    """
+    c = comprobar_credenciales(_settings(minio_access_key="minioadmin"), {})
+    assert (c.estado, c.causa) == (DEGRADADO, "credencial_por_defecto")
+    assert "MINIO_ACCESS_KEY" in c.detalle
+    assert "minioadmin" in c.detalle
+
+
+def test_detecta_el_nombre_de_variable_parecido():
+    """MINIO_ROOT_USER es como se llaman las variables DEL SERVICIO de MinIO.
+
+    Copiarlas tal cual al tileserver es el error natural, y el mensaje tiene que
+    nombrar la que sí encontró para que se vea el desfase.
+    """
+    c = comprobar_credenciales(
+        _settings(),
+        {"MINIO_ROOT_USER": "tiler-ro", "MINIO_ROOT_PASSWORD": "x"},
+    )
+    assert c.causa == "credencial_por_defecto"
+    assert "MINIO_ROOT_USER" in c.detalle
+    assert "MINIO_ROOT_PASSWORD" in c.detalle
+
+
+def test_no_confunde_las_aws_que_pone_configure_gdal():
+    """`configure_gdal()` define AWS_ACCESS_KEY_ID siempre: señalarla sería un
+    falso positivo garantizado."""
+    c = comprobar_credenciales(
+        _settings(), {"AWS_ACCESS_KEY_ID": "x", "AWS_SECRET_ACCESS_KEY": "y"}
+    )
+    assert "AWS_ACCESS_KEY_ID" not in c.detalle
+
+
+def test_una_sola_variable_faltante_se_nombra_sola():
+    c = comprobar_credenciales(_settings(), {"MINIO_ACCESS_KEY": "tiler-ro"})
+    assert "MINIO_SECRET_KEY" in c.detalle
+    assert "MINIO_ACCESS_KEY y" not in c.detalle
+
+
+def test_la_access_key_se_informa_enmascarada():
+    """Sirve para distinguir tiler-ro de minioadmin, no para usarla."""
+    c = comprobar_credenciales(_settings(minio_access_key="tiler-ro"), _ENTORNO_COMPLETO)
+    assert "ti…" in c.detalle
+    assert "tiler-ro" not in c.detalle
+
+
+def test_el_secreto_nunca_aparece():
+    c = comprobar_credenciales(
+        _settings(minio_secret_key="secreto-larguisimo-de-minio"), _ENTORNO_COMPLETO
+    )
+    assert "secreto-larguisimo-de-minio" not in c.detalle
 
 
 # --------------------------------------------------------------------------
@@ -166,9 +235,7 @@ def test_partir_host_y_puerto(endpoint, esperado):
 
 def test_la_forma_del_endpoint_no_tumba_el_informe_a_503():
     """Son heurísticas: no pueden provocar un 503 por sí solas."""
-    cuerpo, codigo = informe(
-        _settings(minio_endpoint="minio.railway.internal"),
-        crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")),
+    cuerpo, codigo = informe(_settings(minio_endpoint="minio.railway.internal"), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")),
     )
     assert (codigo, cuerpo["status"]) == (200, DEGRADADO)
 
@@ -388,9 +455,7 @@ def test_la_causa_de_red_no_filtra_el_endpoint():
 
 
 def test_la_causa_viaja_en_el_json():
-    cuerpo, _ = informe(
-        _settings(),
-        crear_cliente=lambda: _ClienteQueFalla(_MaxRetryError(OSError("Name or service not known"))),
+    cuerpo, _ = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_MaxRetryError(OSError("Name or service not known"))),
     )
     minio = next(c for c in cuerpo["checks"] if c["name"] == "minio")
     assert minio["cause"] == "dns"
@@ -398,7 +463,7 @@ def test_la_causa_viaja_en_el_json():
 
 def test_sin_causa_no_aparece_la_clave():
     # Evita llenar la respuesta de nulls cuando no hay nada que informar.
-    cuerpo, _ = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
+    cuerpo, _ = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
     minio = next(c for c in cuerpo["checks"] if c["name"] == "minio")
     assert "cause" not in minio
 
@@ -437,7 +502,7 @@ def test_el_informe_nunca_publica_el_secreto_ni_el_endpoint(codigo):
 
     El mensaje crudo de minio-py incluye el endpoint, por eso no se devuelve.
     """
-    cuerpo, _ = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3(codigo)))
+    cuerpo, _ = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3(codigo)))
     texto = str(cuerpo)
     assert SECRETO not in texto
     assert ENDPOINT_INTERNO not in texto
@@ -448,7 +513,7 @@ def test_el_informe_nunca_publica_el_secreto_ni_el_endpoint(codigo):
 def test_el_informe_publica_el_bucket():
     # El bucket no es secreto: viaja en cada `?url=s3://bucket/...` de tile, y
     # es justo el dato que hace falta para diagnosticar un 400 URL_NO_PERMITIDA.
-    cuerpo, _ = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
+    cuerpo, _ = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
     assert cuerpo["bucket"] == "terra-assets"
 
 
@@ -457,30 +522,33 @@ def test_el_informe_publica_el_bucket():
 # --------------------------------------------------------------------------
 
 def test_todo_bien_da_200_y_ok():
-    cuerpo, codigo = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
+    cuerpo, codigo = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
     assert (codigo, cuerpo["status"]) == (200, OK)
 
 
 def test_degradado_da_200():
     """Ante la duda no se grita fallo: un chequeo ruidoso se aprende a ignorar."""
-    cuerpo, codigo = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("AccessDenied")))
+    cuerpo, codigo = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("AccessDenied")))
     assert (codigo, cuerpo["status"]) == (200, DEGRADADO)
 
 
 def test_error_da_503():
-    cuerpo, codigo = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchBucket")))
+    cuerpo, codigo = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchBucket")))
     assert (codigo, cuerpo["status"]) == (503, ERROR)
 
 
 def test_un_error_arrastra_aunque_lo_otro_este_bien():
     """MinIO sano no compensa que falte el secreto: los tiles darían 503 igual."""
-    cuerpo, codigo = informe(
-        _settings(map_token_secret=None),
-        crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")),
+    cuerpo, codigo = informe(_settings(map_token_secret=None), entorno=_ENTORNO_COMPLETO, crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")),
     )
     assert codigo == 503
     estados = {c["name"]: c["status"] for c in cuerpo["checks"]}
-    assert estados == {"map_token_secret": ERROR, "minio_endpoint": OK, "minio": OK}
+    assert estados == {
+        "map_token_secret": ERROR,
+        "minio_endpoint": OK,
+        "minio_credenciales": OK,
+        "minio": OK,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -496,7 +564,7 @@ def _app(cliente_factory) -> TestClient:
 
     @app.get("/health/ready")
     def ready():
-        cuerpo, codigo = informe(_settings(), crear_cliente=cliente_factory)
+        cuerpo, codigo = informe(_settings(), entorno=_ENTORNO_COMPLETO, crear_cliente=cliente_factory)
         return JSONResponse(cuerpo, status_code=codigo)
 
     return TestClient(app, raise_server_exceptions=False)
@@ -522,6 +590,7 @@ def test_readiness_devuelve_json_con_los_checks():
     assert [c["name"] for c in cuerpo["checks"]] == [
         "map_token_secret",
         "minio_endpoint",
+        "minio_credenciales",
         "minio",
     ]
 

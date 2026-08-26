@@ -168,6 +168,9 @@ parsear el texto:
 | `puerto_en_publico` | `minio_endpoint` | Al revés: el dominio público va sin puerto, el edge escucha en 443. |
 | `tls_en_privado` / `sin_tls_en_publico` | `minio_endpoint` | `MINIO_SECURE` al revés. Privado → `False`, público → `True`. |
 | `localhost` | `minio_endpoint` | Dentro del contenedor, `localhost` es el propio contenedor. Suele ser un `.env` de docker-compose quedado de antes. |
+| `credencial_por_defecto` | `minio_credenciales` | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` no están en el entorno y se está usando el default `minioadmin`. Si nombraste la variable distinto (p.ej. `MINIO_ROOT_USER`), el mensaje lo dice. |
+| `policy_no_asignada` | `minio` | Las credenciales son válidas pero MinIO negó objeto **y** bucket. La policy no está asignada al usuario, o no nombra este bucket. |
+| `bucket_inexistente` | `minio` | Las credenciales llegan y no hay ningún bucket con ese nombre. |
 | `dns` | `minio` | El hostname no resolvió: nombre de servicio equivocado, o servicios en proyectos distintos. |
 | `rechazado` | `minio` | Resolvió pero nada escucha ahí: puerto equivocado (9001 es la consola), o MinIO escuchando solo en IPv4 — la red privada de Railway es **solo IPv6**. |
 | `tls` | `minio` | Corte de conexión sin handshake. Revisá `MINIO_SECURE`. |

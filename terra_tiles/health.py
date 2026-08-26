@@ -37,6 +37,7 @@ GDAL. Salen de la misma `Settings`, así que es improbable que difieran, pero
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Callable
 
@@ -134,6 +135,70 @@ def comprobar_token_secret(settings: Settings) -> Comprobacion:
         "Falta MAP_TOKEN_SECRET: /cog/* va a devolver 503 en todos los tiles. "
         "Tiene que valer lo mismo que GeoData__MapTokenSecret en Geocore.",
     )
+
+
+# Nombres con los que es fácil confundirse. `MINIO_ROOT_USER` encabeza la lista
+# porque es como se llaman las variables DEL SERVICIO de MinIO: copiarlas tal
+# cual al tileserver es el error natural.
+#
+# A propósito NO se listan las `AWS_*`: `configure_gdal()` las define siempre,
+# así que detectarlas sería un falso positivo garantizado.
+_ALIAS_ACCESS_KEY = ("MINIO_ROOT_USER", "MINIO_ACCESSKEY", "MINIO_ACCESS_KEY_ID",
+                     "MINIO_USER", "MINIO_KEY", "S3_ACCESS_KEY")
+_ALIAS_SECRET_KEY = ("MINIO_ROOT_PASSWORD", "MINIO_SECRETKEY", "MINIO_SECRET_ACCESS_KEY",
+                     "MINIO_PASSWORD", "S3_SECRET_KEY")
+
+# Lo que `Settings.from_env` usa cuando la variable no está.
+_DEFAULT_CREDENCIAL = "minioadmin"
+
+
+def comprobar_credenciales(settings: Settings, entorno: dict | None = None) -> Comprobacion:
+    """¿Las credenciales vienen del entorno, o son el default silencioso?
+
+    `Settings.from_env` cae a `minioadmin` cuando la variable no está. Eso
+    convierte un nombre de variable mal escrito en un error de PERMISOS, que
+    manda a revisar la policy —donde no hay nada malo— en vez de la config.
+
+    Este es el único chequeo que mira el entorno directamente en vez de leer
+    `Settings`: la pregunta no es cuánto vale la credencial, sino si el entorno
+    la proveyó. Después de resolverse en `Settings` esa diferencia se pierde.
+
+    La access key se informa enmascarada. No es tan sensible como el secreto,
+    pero este endpoint es público y con el prefijo alcanza para distinguir
+    `tiler-ro` de `minioadmin`, que es todo lo que hace falta acá.
+    """
+    entorno = os.environ if entorno is None else entorno
+    faltantes = [v for v in ("MINIO_ACCESS_KEY", "MINIO_SECRET_KEY") if not entorno.get(v)]
+
+    if not faltantes:
+        return Comprobacion(
+            "minio_credenciales", OK,
+            f"Definidas en el entorno. Access key: {_enmascarar(settings.minio_access_key)}.",
+        )
+
+    alias = [n for n in _ALIAS_ACCESS_KEY + _ALIAS_SECRET_KEY if entorno.get(n)]
+    detalle = (
+        f"{' y '.join(faltantes)} no está{'n' if len(faltantes) > 1 else ''} definida"
+        f"{'s' if len(faltantes) > 1 else ''} en el entorno, así que el servicio "
+        f"está usando el default '{_DEFAULT_CREDENCIAL}'. Si MinIO tiene un "
+        f"usuario con ese nombre y sin permisos, el fallo aparece como "
+        f"AccessDenied y manda a revisar la policy, donde no hay nada malo."
+    )
+    if alias:
+        detalle += (
+            f" Sí están definidas: {', '.join(sorted(alias))}. Son otras variables: "
+            f"este servicio lee MINIO_ACCESS_KEY y MINIO_SECRET_KEY."
+        )
+    return Comprobacion("minio_credenciales", DEGRADADO, detalle, causa="credencial_por_defecto")
+
+
+def _enmascarar(valor: str) -> str:
+    """Prefijo y longitud: alcanza para identificar, no para usar."""
+    if not valor:
+        return "(vacía)"
+    if len(valor) <= 4:
+        return f"(… {len(valor)} caracteres)"
+    return f"{valor[:2]}… ({len(valor)} caracteres)"
 
 
 def comprobar_endpoint(settings: Settings) -> Comprobacion:
@@ -459,6 +524,7 @@ def informe(
     settings: Settings,
     *,
     crear_cliente: Callable[[], object] | None = None,
+    entorno: dict | None = None,
 ) -> tuple[dict, int]:
     """Arma el cuerpo de `/health/ready` y su código HTTP.
 
@@ -468,9 +534,11 @@ def informe(
     """
     comprobaciones = [
         comprobar_token_secret(settings),
-        # Antes del sondeo: si la forma del endpoint está mal, el fallo de red
-        # es una consecuencia y conviene leer primero la causa.
+        # Los dos que siguen van antes del sondeo: si la forma del endpoint o el
+        # origen de las credenciales están mal, el fallo de red o de permisos es
+        # una consecuencia, y conviene leer primero la causa.
         comprobar_endpoint(settings),
+        comprobar_credenciales(settings, entorno),
         comprobar_minio(settings, crear_cliente=crear_cliente),
     ]
 
