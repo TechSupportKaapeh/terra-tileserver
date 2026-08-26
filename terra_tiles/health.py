@@ -102,6 +102,8 @@ class Comprobacion:
     nombre: str
     estado: str
     detalle: str
+    # Sub-código estable para ramificar sin parsear el texto en español.
+    causa: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -123,6 +125,88 @@ def comprobar_token_secret(settings: Settings) -> Comprobacion:
         "Falta MAP_TOKEN_SECRET: /cog/* va a devolver 503 en todos los tiles. "
         "Tiene que valer lo mismo que GeoData__MapTokenSecret en Geocore.",
     )
+
+
+def comprobar_endpoint(settings: Settings) -> Comprobacion:
+    """Revisa la FORMA de MINIO_ENDPOINT, sin tocar la red.
+
+    Los dominios de Railway tienen dos formas incompatibles y confundirlas es
+    el error más repetido al configurar el servicio. Se detecta acá porque el
+    sondeo de red solo puede decir "no hubo respuesta", que es cierto pero no
+    dice cuál de las dos formas está mal.
+
+    Sale como `degradado` y no como `error`: son heurísticas sobre el hostname,
+    y no queremos que un 503 dependa de adivinar. Si además la red falla, el
+    sondeo lo reporta como error por su cuenta y los dos mensajes se suman.
+    """
+    endpoint = settings.minio_endpoint
+    host, puerto = _partir_host_y_puerto(endpoint)
+
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return Comprobacion(
+            "minio_endpoint", DEGRADADO,
+            "MINIO_ENDPOINT apunta a esta misma máquina. Fuera de docker-compose "
+            "no hay ningún MinIO ahí: dentro del contenedor, localhost es el "
+            "propio contenedor.",
+            causa="localhost",
+        )
+
+    if host.endswith(".railway.internal"):
+        if puerto is None:
+            return Comprobacion(
+                "minio_endpoint", DEGRADADO,
+                "El dominio privado de Railway necesita el PUERTO EXPLÍCITO "
+                "(normalmente :9000). La red privada no hace mapeo de puertos: "
+                "sin puerto se asume el 80 o el 443, donde MinIO no escucha. "
+                "Es el dominio público el que va sin puerto, no este.",
+                causa="falta_puerto",
+            )
+        if settings.minio_secure:
+            return Comprobacion(
+                "minio_endpoint", DEGRADADO,
+                "El dominio privado de Railway va en texto plano: poné "
+                "MINIO_SECURE=False. TLS es solo para el dominio público.",
+                causa="tls_en_privado",
+            )
+
+    if host.endswith(".up.railway.app") or host.endswith(".railway.app"):
+        if puerto is not None:
+            return Comprobacion(
+                "minio_endpoint", DEGRADADO,
+                "El dominio público de Railway va SIN puerto: el edge escucha en "
+                "443 y hace de proxy. El puerto explícito es del dominio privado.",
+                causa="puerto_en_publico",
+            )
+        if not settings.minio_secure:
+            return Comprobacion(
+                "minio_endpoint", DEGRADADO,
+                "El dominio público de Railway es solo TLS: poné MINIO_SECURE=True.",
+                causa="sin_tls_en_publico",
+            )
+
+    return Comprobacion("minio_endpoint", OK, "Forma coherente con MINIO_SECURE.")
+
+
+def _partir_host_y_puerto(endpoint: str) -> tuple[str, int | None]:
+    """Separa `host:puerto`, tolerando IPv6 entre corchetes (`[::1]:9000`)."""
+    resto = endpoint
+    if resto.startswith("["):                      # literal IPv6
+        cierre = resto.find("]")
+        if cierre == -1:
+            return resto, None
+        host, resto = resto[1:cierre], resto[cierre + 1:]
+        if resto.startswith(":") and resto[1:].isdigit():
+            return host, int(resto[1:])
+        return host, None
+
+    # Más de un ':' sin corchetes es un IPv6 escrito sin la forma que exige la
+    # URL. Partir por el último ':' convertiría `fd12::34` en host `fd12:` y
+    # puerto 34, que es peor que no adivinar.
+    if resto.count(":") == 1:
+        host, _, cola = resto.rpartition(":")
+        if cola.isdigit():
+            return host, int(cola)
+    return resto, None
 
 
 def comprobar_minio(
@@ -149,10 +233,10 @@ def comprobar_minio(
         # Que exista es raro (la key es de sondeo) pero prueba lo mismo y mejor.
         return Comprobacion("minio", OK, "MinIO respondió y la lectura funciona.")
     except Exception as e:  # noqa: BLE001
-        return _interpretar(e)
+        return _interpretar(e, settings.minio_secure)
 
 
-def _interpretar(e: Exception) -> Comprobacion:
+def _interpretar(e: Exception, secure: bool) -> Comprobacion:
     """Traduce la excepción a una causa accionable.
 
     Se ramifica por `code` en vez de por el tipo de excepción, para no acoplar
@@ -168,17 +252,119 @@ def _interpretar(e: Exception) -> Comprobacion:
         logger.warning("MinIO devolvió un código no contemplado: %s", codigo)
         return Comprobacion("minio", ERROR, f"MinIO respondió con un error inesperado: {codigo}")
 
-    # Sin `code` no hubo respuesta HTTP: no resolvió el nombre, no hubo ruta, o
-    # se agotó el timeout. Es el fallo típico del dominio privado mal escrito.
-    logger.warning("No hubo respuesta de MinIO: %s", type(e).__name__)
-    return Comprobacion(
-        "minio",
-        ERROR,
-        "No hubo respuesta de MinIO. Revisá MINIO_ENDPOINT y MINIO_SECURE: el "
-        "dominio privado de Railway lleva puerto (:9000) y va sin TLS; el "
-        "público va sin puerto y con TLS. La red privada de Railway es solo "
-        "IPv6, así que el destino tiene que escuchar en la dirección '::'.",
-    )
+    # Sin `code` no hubo respuesta HTTP. Las causas posibles piden acciones
+    # distintas, así que agruparlas en un solo mensaje obliga a adivinar.
+    causa, detalle = _clasificar_fallo_de_red(e, secure)
+    logger.warning("No hubo respuesta de MinIO (%s): %s", causa, type(e).__name__)
+    return Comprobacion("minio", ERROR, detalle, causa=causa)
+
+
+# Señales por causa, buscadas sobre los NOMBRES DE CLASE y los mensajes de la
+# cadena de excepciones. Los nombres de clase van primero porque son estables:
+# el texto de los errores de socket viene traducido al idioma del sistema
+# operativo, así que "connection refused" no aparece en un Windows en español.
+_SENALES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("dns", ("nameresolutionerror", "gaierror", "name or service not known",
+             "getaddrinfo failed", "nodename nor servname",
+             "temporary failure in name resolution")),
+    # Un error de SSL explícito. Ojo: el caso más común de TLS mal configurado
+    # NO llega acá — ver `_corte`.
+    ("tls", ("sslerror", "sslcertverificationerror", "wrong_version_number",
+             "unexpected_eof", "record layer failure", "handshake")),
+    ("timeout", ("connecttimeouterror", "readtimeouterror", "timeouterror", "timed out")),
+    # Nada escuchando en ese puerto.
+    ("rechazado", ("connectionrefusederror", "connection refused")),
+    # Algo escuchando que cortó la conexión: es distinto de que no haya nadie.
+    ("corte", ("connectionreseterror", "protocolerror", "connection aborted",
+               "brokenpipeerror", "incompleteread")),
+    ("inalcanzable", ("no route to host", "network is unreachable", "ehostunreach")),
+)
+
+_DETALLES_DE_RED: dict[str, str] = {
+    "dns": (
+        "El hostname de MINIO_ENDPOINT no resolvió: no hay ningún servicio con "
+        "ese nombre en la red privada. El dominio privado se arma con el NOMBRE "
+        "DEL SERVICIO en Railway (nombre-del-servicio.railway.internal), que no "
+        "tiene por qué ser 'minio'. Verificá también que los dos servicios estén "
+        "en el MISMO proyecto: la red privada no cruza proyectos."
+    ),
+    "tls": (
+        "Falló el handshake TLS. Regla: el dominio privado "
+        "(.railway.internal:9000) va sin TLS -> MINIO_SECURE=False; el público "
+        "(.up.railway.app, sin puerto) va con TLS -> MINIO_SECURE=True."
+    ),
+    "rechazado": (
+        "El hostname resolvió pero no hay nada escuchando en ese puerto. Dos "
+        "causas: el puerto equivocado (la API S3 de MinIO es la 9000; la 9001 es "
+        "la consola), o que MinIO escuche solo en IPv4. La red privada de Railway "
+        "es solo IPv6, así que el destino tiene que escuchar en '::', no en "
+        "'0.0.0.0'."
+    ),
+    "timeout": (
+        "Conectó pero MinIO no respondió a tiempo. Puede estar arrancando o "
+        "caído, o el puerto puede atender otro protocolo."
+    ),
+    "inalcanzable": (
+        "No hay ruta hacia ese host. Suele ser la red privada de Railway: los "
+        "dos servicios tienen que estar en el mismo proyecto, y el destino tiene "
+        "que escuchar en IPv6 ('::')."
+    ),
+    "desconocido": (
+        "No hubo respuesta de MinIO y la causa no se pudo clasificar. Revisá "
+        "MINIO_ENDPOINT y MINIO_SECURE, y los logs del servicio de MinIO."
+    ),
+}
+
+# El corte de conexión se interpreta según hayamos pedido TLS o no, porque la
+# excepción sola no alcanza para distinguirlo: hablarle TLS a un puerto de texto
+# plano no produce ningún error de SSL, produce un ConnectionReset envuelto en
+# ProtocolError. Verificado contra urllib3, no supuesto.
+_CORTE_CON_TLS = (
+    "Se pidió TLS y el servidor cortó la conexión sin completar el handshake. "
+    "Casi siempre es MINIO_SECURE=True contra un endpoint de texto plano: el "
+    "dominio privado de Railway (.railway.internal:9000) no lleva TLS. Probá "
+    "con MINIO_SECURE=False."
+)
+_CORTE_SIN_TLS = (
+    "Algo respondió en ese puerto pero cortó la conexión. Si el endpoint es el "
+    "dominio público de Railway, habla TLS y hay que poner MINIO_SECURE=True. "
+    "Si es el privado, revisá que el puerto sea el de la API S3 (9000) y no el "
+    "de la consola (9001)."
+)
+
+
+def _clasificar_fallo_de_red(e: Exception, secure: bool) -> tuple[str, str]:
+    """Distingue DNS, TLS, puerto cerrado, corte de conexión y timeout.
+
+    Cada una manda a revisar algo distinto —el nombre del servicio, el valor de
+    `MINIO_SECURE`, el puerto, o el estado de MinIO—, así que un único mensaje
+    genérico dejaría al que diagnostica probándolas todas a ciegas.
+
+    Se recorre la cadena de excepciones porque minio-py envuelve todo en un
+    `MaxRetryError` cuyo `.reason` es la causa real. **El texto de la cadena se
+    usa solo para clasificar y nunca se devuelve**: incluye el endpoint.
+    """
+    texto = " ".join(f"{type(x).__name__} {x}" for x in _cadena(e)).lower()
+    for causa, senales in _SENALES:
+        if any(s in texto for s in senales):
+            if causa == "corte":
+                return "tls", (_CORTE_CON_TLS if secure else _CORTE_SIN_TLS)
+            return causa, _DETALLES_DE_RED[causa]
+    return "desconocido", _DETALLES_DE_RED["desconocido"]
+
+
+def _cadena(e: BaseException, limite: int = 10) -> list[BaseException]:
+    """Excepción y sus causas encadenadas, sin ciclos ni recursión infinita."""
+    vistas: list[BaseException] = []
+    actual: BaseException | None = e
+    while actual is not None and len(vistas) < limite and actual not in vistas:
+        vistas.append(actual)
+        # `.reason` es donde urllib3 guarda la causa real dentro de MaxRetryError.
+        siguiente = getattr(actual, "reason", None)
+        if not isinstance(siguiente, BaseException):
+            siguiente = actual.__cause__ or actual.__context__
+        actual = siguiente
+    return vistas
 
 
 def _cliente_por_defecto(settings: Settings):
@@ -216,6 +402,9 @@ def informe(
     """
     comprobaciones = [
         comprobar_token_secret(settings),
+        # Antes del sondeo: si la forma del endpoint está mal, el fallo de red
+        # es una consecuencia y conviene leer primero la causa.
+        comprobar_endpoint(settings),
         comprobar_minio(settings, crear_cliente=crear_cliente),
     ]
 
@@ -231,7 +420,10 @@ def informe(
         "service": "tileserver-titiler",
         "bucket": settings.minio_bucket,  # no es secreto: va en cada URL de tile
         "checks": [
+            # `cause` solo aparece cuando hay un sub-código que aporte algo, para
+            # no llenar la respuesta de nulls cuando todo está bien.
             {"name": c.nombre, "status": c.estado, "detail": c.detalle}
+            | ({"cause": c.causa} if c.causa else {})
             for c in comprobaciones
         ],
     }

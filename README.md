@@ -156,8 +156,25 @@ curl https://<titiler>/health/ready
 | `status` | HTTP | Qué hacer |
 |---|---|---|
 | `ok` | 200 | Config y storage listos. Falta el tile real. |
-| `degradado` | 200 | MinIO respondió y aceptó las credenciales, pero negó la lectura. Puede ser una policy de `tiler-ro` sin `s3:GetObject`, o MinIO ocultando que la key no existe: no se puede concluir desde afuera. |
+| `degradado` | 200 | Hay algo sospechoso pero no concluyente. No tumba el chequeo a 503 a propósito. |
 | `error` | 503 | El `detail` de cada check nombra la variable a corregir. |
+
+Cuando hay algo que corregir, el check trae un `cause` estable para no tener que
+parsear el texto:
+
+| `cause` | Check | Qué significa |
+|---|---|---|
+| `falta_puerto` | `minio_endpoint` | Dominio privado sin `:9000`. **La red privada no mapea puertos**; sin puerto se asume el 80. Es el público el que va sin puerto. |
+| `puerto_en_publico` | `minio_endpoint` | Al revés: el dominio público va sin puerto, el edge escucha en 443. |
+| `tls_en_privado` / `sin_tls_en_publico` | `minio_endpoint` | `MINIO_SECURE` al revés. Privado → `False`, público → `True`. |
+| `localhost` | `minio_endpoint` | Dentro del contenedor, `localhost` es el propio contenedor. Suele ser un `.env` de docker-compose quedado de antes. |
+| `dns` | `minio` | El hostname no resolvió: nombre de servicio equivocado, o servicios en proyectos distintos. |
+| `rechazado` | `minio` | Resolvió pero nada escucha ahí: puerto equivocado (9001 es la consola), o MinIO escuchando solo en IPv4 — la red privada de Railway es **solo IPv6**. |
+| `tls` | `minio` | Corte de conexión sin handshake. Revisá `MINIO_SECURE`. |
+| `timeout` | `minio` | MinIO arrancando, caído, o el puerto atiende otro protocolo. |
+
+`minio_endpoint` revisa la **forma** del endpoint sin tocar la red, así que
+señala la causa incluso cuando el sondeo solo puede decir "no hubo respuesta".
 
 Sirve sobre todo para el fallo más caro de diagnosticar: **sin
 `MAP_TOKEN_SECRET`, `/health` da 200 y Railway muestra el servicio verde

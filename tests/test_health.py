@@ -16,6 +16,7 @@ from terra_tiles.health import (
     ERROR,
     OK,
     Comprobacion,
+    comprobar_endpoint,
     comprobar_minio,
     comprobar_token_secret,
     informe,
@@ -85,6 +86,94 @@ def test_sin_secreto_es_error():
 
 
 # --------------------------------------------------------------------------
+# La forma del endpoint, sin tocar la red
+# --------------------------------------------------------------------------
+
+def test_privado_sin_puerto_es_el_error_mas_comun():
+    """La red privada de Railway no mapea puertos: sin :9000 se asume el 80.
+
+    Es al revés que el dominio público, y por eso se confunde.
+    """
+    c = comprobar_endpoint(_settings(minio_endpoint="minio.railway.internal"))
+    assert (c.estado, c.causa) == (DEGRADADO, "falta_puerto")
+    assert ":9000" in c.detalle
+
+
+def test_privado_con_puerto_esta_bien():
+    c = comprobar_endpoint(_settings(minio_endpoint="minio.railway.internal:9000"))
+    assert c.estado == OK
+
+
+def test_privado_con_tls_avisa():
+    c = comprobar_endpoint(
+        _settings(minio_endpoint="minio.railway.internal:9000", minio_secure=True)
+    )
+    assert c.causa == "tls_en_privado"
+
+
+def test_publico_con_puerto_avisa():
+    c = comprobar_endpoint(
+        _settings(minio_endpoint="bucket-x.up.railway.app:9000", minio_secure=True)
+    )
+    assert c.causa == "puerto_en_publico"
+
+
+def test_publico_sin_tls_avisa():
+    c = comprobar_endpoint(
+        _settings(minio_endpoint="bucket-x.up.railway.app", minio_secure=False)
+    )
+    assert c.causa == "sin_tls_en_publico"
+
+
+def test_publico_bien_configurado():
+    c = comprobar_endpoint(
+        _settings(minio_endpoint="bucket-x.up.railway.app", minio_secure=True)
+    )
+    assert c.estado == OK
+
+
+@pytest.mark.parametrize("host", ["localhost:9000", "127.0.0.1:9000", "localhost"])
+def test_localhost_avisa_que_no_hay_nada_ahi(host):
+    # Es el .env de docker-compose quedado de antes: dentro del contenedor,
+    # localhost es el propio contenedor.
+    assert comprobar_endpoint(_settings(minio_endpoint=host)).causa == "localhost"
+
+
+def test_un_host_cualquiera_no_molesta():
+    """Las heurísticas son solo para los dominios de Railway."""
+    c = comprobar_endpoint(_settings(minio_endpoint="storage.interno.example:9000"))
+    assert c.estado == OK
+
+
+@pytest.mark.parametrize(
+    "endpoint, esperado",
+    [
+        ("minio.railway.internal:9000", ("minio.railway.internal", 9000)),
+        ("minio.railway.internal", ("minio.railway.internal", None)),
+        ("[::1]:9000", ("::1", 9000)),
+        ("[fd12::34]", ("fd12::34", None)),
+        # Sin corchetes no se puede distinguir el último grupo de un puerto.
+        # Partir por el último ':' daría host 'fd12:' y puerto 34: se prefiere
+        # no adivinar antes que devolver algo mal partido.
+        ("fd12::34", ("fd12::34", None)),
+    ],
+)
+def test_partir_host_y_puerto(endpoint, esperado):
+    from terra_tiles.health import _partir_host_y_puerto
+
+    assert _partir_host_y_puerto(endpoint) == esperado
+
+
+def test_la_forma_del_endpoint_no_tumba_el_informe_a_503():
+    """Son heurísticas: no pueden provocar un 503 por sí solas."""
+    cuerpo, codigo = informe(
+        _settings(minio_endpoint="minio.railway.internal"),
+        crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")),
+    )
+    assert (codigo, cuerpo["status"]) == (200, DEGRADADO)
+
+
+# --------------------------------------------------------------------------
 # El sondeo a MinIO
 # --------------------------------------------------------------------------
 
@@ -134,12 +223,127 @@ def test_codigo_desconocido_es_error():
     assert "TeapotError" in c.detalle
 
 
-def test_sin_respuesta_sugiere_endpoint_y_secure():
-    """Una excepción sin `code` es de red: DNS, ruta o timeout."""
-    c = comprobar_minio(_settings(), crear_cliente=lambda: _ClienteQueFalla(OSError("timed out")))
-    assert c.estado == ERROR
-    assert "MINIO_ENDPOINT" in c.detalle
+# --------------------------------------------------------------------------
+# Fallos de red: cada causa manda a revisar algo distinto
+# --------------------------------------------------------------------------
+
+class _MaxRetryError(Exception):
+    """Imita el envoltorio de urllib3: la causa real vive en `.reason`."""
+
+    def __init__(self, reason: BaseException) -> None:
+        super().__init__(f"max retries con {ENDPOINT_INTERNO}")
+        self.reason = reason
+
+
+class _ProtocolError(Exception):
+    """Imita `urllib3.exceptions.ProtocolError`."""
+
+
+def _causa_de(excepcion: Exception, *, secure: bool = False) -> Comprobacion:
+    return comprobar_minio(
+        _settings(minio_secure=secure),
+        crear_cliente=lambda: _ClienteQueFalla(excepcion),
+    )
+
+
+def test_dns_apunta_al_nombre_del_servicio():
+    """El hostname privado sale del nombre del servicio, no siempre es 'minio'."""
+    c = _causa_de(_MaxRetryError(OSError("[Errno -2] Name or service not known")))
+    assert (c.estado, c.causa) == (ERROR, "dns")
+    assert "railway.internal" in c.detalle
+
+
+def test_tls_apunta_a_minio_secure():
+    """MINIO_SECURE=True contra el dominio privado, que va en texto plano."""
+    c = _causa_de(_MaxRetryError(Exception("SSLError: WRONG_VERSION_NUMBER")))
+    assert (c.estado, c.causa) == (ERROR, "tls")
     assert "MINIO_SECURE" in c.detalle
+
+
+def test_conexion_rechazada_apunta_al_puerto_y_a_ipv6():
+    """Puerto equivocado (9001 es la consola) o MinIO escuchando solo en IPv4."""
+    c = _causa_de(_MaxRetryError(ConnectionRefusedError("[Errno 111] Connection refused")))
+    assert (c.estado, c.causa) == (ERROR, "rechazado")
+    assert "9000" in c.detalle
+    assert "::" in c.detalle
+
+
+def test_timeout_no_se_confunde_con_rechazo():
+    c = _causa_de(_MaxRetryError(Exception("ConnectTimeoutError: timed out")))
+    assert c.causa == "timeout"
+
+
+# Las dos que siguen usan la forma REAL que produce urllib3, verificada contra
+# un socket de texto plano. Hablarle TLS a un puerto sin TLS **no genera ningún
+# error de SSL**: genera un ConnectionReset envuelto en ProtocolError. Una
+# versión anterior de esta clasificación buscaba "sslerror" y por eso nunca
+# disparaba — los tests pasaban porque usaban una excepción inventada.
+def test_corte_con_tls_pedido_manda_a_apagar_minio_secure():
+    c = _causa_de(
+        _MaxRetryError(_ProtocolError("('Connection aborted.', ConnectionResetError(10054))")),
+        secure=True,
+    )
+    assert (c.estado, c.causa) == (ERROR, "tls")
+    assert "MINIO_SECURE=False" in c.detalle
+
+
+def test_corte_sin_tls_pedido_manda_a_encenderlo():
+    """La misma excepción, la acción contraria: depende de si pedimos TLS."""
+    c = _causa_de(
+        _MaxRetryError(_ProtocolError("('Connection aborted.', ConnectionResetError(10054))")),
+        secure=False,
+    )
+    assert (c.estado, c.causa) == (ERROR, "tls")
+    assert "MINIO_SECURE=True" in c.detalle
+
+
+def test_sin_ruta_al_host_menciona_el_proyecto_y_ipv6():
+    c = _causa_de(_MaxRetryError(OSError("[Errno 113] No route to host")))
+    assert c.causa == "inalcanzable"
+    assert "::" in c.detalle
+
+
+def test_causa_desconocida_no_revienta():
+    c = _causa_de(_MaxRetryError(Exception("algo rarísimo")))
+    assert (c.estado, c.causa) == (ERROR, "desconocido")
+
+
+def test_se_recorre_la_cadena_no_solo_la_excepcion_de_arriba():
+    """minio-py envuelve todo en MaxRetryError: mirar solo el nivel de arriba
+    clasificaría cualquier fallo de red como desconocido."""
+    envuelta = _MaxRetryError(OSError("getaddrinfo failed"))
+    assert _causa_de(envuelta).causa == "dns"
+
+
+def test_una_cadena_ciclica_no_cuelga():
+    a = Exception("a")
+    b = Exception("b")
+    a.__cause__ = b
+    b.__cause__ = a
+    assert _causa_de(a).causa == "desconocido"
+
+
+def test_la_causa_de_red_no_filtra_el_endpoint():
+    """El mensaje crudo de urllib3 incluye el host: se usa para clasificar,
+    nunca se devuelve."""
+    c = _causa_de(_MaxRetryError(OSError(f"no resolvió {ENDPOINT_INTERNO}")))
+    assert ENDPOINT_INTERNO not in c.detalle
+
+
+def test_la_causa_viaja_en_el_json():
+    cuerpo, _ = informe(
+        _settings(),
+        crear_cliente=lambda: _ClienteQueFalla(_MaxRetryError(OSError("Name or service not known"))),
+    )
+    minio = next(c for c in cuerpo["checks"] if c["name"] == "minio")
+    assert minio["cause"] == "dns"
+
+
+def test_sin_causa_no_aparece_la_clave():
+    # Evita llenar la respuesta de nulls cuando no hay nada que informar.
+    cuerpo, _ = informe(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("NoSuchKey")))
+    minio = next(c for c in cuerpo["checks"] if c["name"] == "minio")
+    assert "cause" not in minio
 
 
 def test_sin_credenciales_es_error_sin_tocar_la_red():
@@ -219,7 +423,7 @@ def test_un_error_arrastra_aunque_lo_otro_este_bien():
     )
     assert codigo == 503
     estados = {c["name"]: c["status"] for c in cuerpo["checks"]}
-    assert estados == {"map_token_secret": ERROR, "minio": OK}
+    assert estados == {"map_token_secret": ERROR, "minio_endpoint": OK, "minio": OK}
 
 
 # --------------------------------------------------------------------------
@@ -258,7 +462,11 @@ def test_readiness_devuelve_json_con_los_checks():
     assert r.status_code == 200
     cuerpo = r.json()
     assert cuerpo["status"] == OK
-    assert [c["name"] for c in cuerpo["checks"]] == ["map_token_secret", "minio"]
+    assert [c["name"] for c in cuerpo["checks"]] == [
+        "map_token_secret",
+        "minio_endpoint",
+        "minio",
+    ]
 
 
 def test_comprobacion_ok_es_falso_solo_en_error():
