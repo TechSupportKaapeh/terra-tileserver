@@ -111,7 +111,11 @@ Sube un GeoTIFF mínimo y lo lee por `/vsis3/`, que es exactamente el mecanismo
 que usa TiTiler internamente. Si ese script pasa, los tiles van a funcionar.
 
 > `scripts/` no entra en la imagen (`.dockerignore`): es diagnóstico, no servicio.
-> `minio` y `numpy` están en `requirements.txt` solo para él.
+> `numpy` está en `requirements.txt` solo para él. `minio` ya no: lo usa
+> `/health/ready` y es dependencia del servicio.
+
+Contra un deploy remoto no hace falta el script — está `/health/ready`, que
+sondea MinIO desde adentro y no necesita credenciales de escritura.
 
 ---
 
@@ -123,7 +127,48 @@ que usa TiTiler internamente. Si ese script pasa, los tiles van a funcionar.
 3. Healthcheck en `/health` (no requiere token).
 4. MinIO va en **otro** servicio, con volumen propio.
 
+> **El healthcheck de Railway va a `/health`, no a `/health/ready`.** `/health`
+> solo dice que el proceso vive y nunca consulta MinIO: si dependiera del
+> storage, un parpadeo de MinIO haría que Railway reinicie un tileserver sano,
+> y el reinicio no arregla nada de lo que falló. `/health/ready` es para
+> diagnosticar, no para que un orquestador tome decisiones.
+
 ### Verificación post-deploy
+
+**Primero `/health/ready`.** Un solo pedido, sin token, y distingue las formas
+conocidas de romper el deploy antes de que haga falta subir ningún COG:
+
+```bash
+curl https://<titiler>/health/ready
+```
+
+```json
+{
+  "status": "ok",
+  "bucket": "terra-assets",
+  "checks": [
+    {"name": "map_token_secret", "status": "ok", "detail": "Configurado."},
+    {"name": "minio",            "status": "ok", "detail": "MinIO respondió y la lectura funciona."}
+  ]
+}
+```
+
+| `status` | HTTP | Qué hacer |
+|---|---|---|
+| `ok` | 200 | Config y storage listos. Falta el tile real. |
+| `degradado` | 200 | MinIO respondió y aceptó las credenciales, pero negó la lectura. Puede ser una policy de `tiler-ro` sin `s3:GetObject`, o MinIO ocultando que la key no existe: no se puede concluir desde afuera. |
+| `error` | 503 | El `detail` de cada check nombra la variable a corregir. |
+
+Sirve sobre todo para el fallo más caro de diagnosticar: **sin
+`MAP_TOKEN_SECRET`, `/health` da 200 y Railway muestra el servicio verde
+mientras todos los tiles dan 503.** `/health/ready` lo dice de entrada.
+
+Lo que **no** prueba: que la configuración de GDAL sea correcta. El sondeo usa
+el cliente de MinIO, no `/vsis3/`. Salen de la misma `Settings`, pero detalles
+como `AWS_S3_ADDRESSING_STYLE=path` solo los ejercita GDAL — eso lo cierra
+recién el primer tile real.
+
+#### Después, los tiles
 
 `/health` en 200 no prueba nada sobre el token: la validación corre en `/cog/*`.
 Para cerrar el flujo hace falta un tile real con un token de

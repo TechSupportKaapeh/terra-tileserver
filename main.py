@@ -35,12 +35,13 @@ configure_gdal(settings)
 # >>>>> A PARTIR DE ACÁ SÍ SE PUEDE IMPORTAR TiTiler <<<<<
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from rio_tiler.errors import TileOutsideBounds
 from titiler.core.factory import TilerFactory
 
 from terra_tiles.caching import CacheControlMiddleware
+from terra_tiles.health import informe
 from terra_tiles.security import crear_validador_de_ruta, crear_validador_de_token
 
 # Rutas absolutas respecto de este archivo: con rutas relativas, `StaticFiles`
@@ -71,8 +72,29 @@ app.mount("/static", StaticFiles(directory=str(_PUBLIC)), name="static")
 
 @app.get("/health")
 def health():
-    """Liveness para Railway. Sin token: tiene que responder aunque falte config."""
+    """Liveness para Railway. Sin token: tiene que responder aunque falte config.
+
+    **No consulta MinIO a propósito.** Este es el chequeo que Railway usa para
+    decidir si reinicia el contenedor: si dependiera del storage, un parpadeo de
+    MinIO reiniciaría un tileserver sano, y reiniciarlo no arregla nada de lo
+    que falló. Para saber si el servicio puede trabajar, `/health/ready`.
+    """
     return {"status": "ok", "service": "tileserver-titiler"}
+
+
+@app.get("/health/ready")
+def ready():
+    """Readiness: config completa y MinIO alcanzable. Para diagnosticar un deploy.
+
+    Declarada `def` y no `async def`: el sondeo a MinIO es una llamada de red
+    bloqueante, y FastAPI corre las funciones síncronas en un threadpool. Como
+    `async def` bloquearía el event loop entero mientras espera el timeout.
+
+    No lleva token. Solo publica el nombre del bucket —que ya viaja en cada URL
+    de tile— y nunca el endpoint interno ni las credenciales.
+    """
+    cuerpo, codigo = informe(settings)
+    return JSONResponse(cuerpo, status_code=codigo)
 
 
 @app.get("/viewer")

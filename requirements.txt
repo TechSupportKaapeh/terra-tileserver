@@ -3,8 +3,12 @@ uvicorn[standard]==0.30.6
 python-dotenv==1.0.1
 titiler.core==0.18.0
 aiofiles
-# --- Solo para scripts/check_titiler_minio.py (diagnóstico, no es parte del servicio) ---
-minio==7.2.16
-numpy
-
 PyJWT==2.8.0
+
+# Lo usa `terra_tiles/health.py` para sondear MinIO en /health/ready, y también
+# scripts/check_titiler_minio.py. Era solo del script hasta que el readiness
+# check pasó a depender de él: si se saca, /health/ready revienta al importar.
+minio==7.2.16
+
+# --- Solo para scripts/check_titiler_minio.py (diagnóstico, no es parte del servicio) ---
+numpy
