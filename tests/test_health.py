@@ -311,6 +311,37 @@ def test_denegado_y_el_bucket_no_existe_senala_el_nombre():
     assert "MINIO_BUCKET" in c.detalle
 
 
+def test_nosuchbucket_no_se_confunde_con_falta_de_permiso():
+    """Son diagnósticos distintos: en NoSuchBucket MinIO sí nos dejó preguntar.
+
+    Estaban en la misma rama y el mensaje hablaba solo de la policy, mandando a
+    revisar permisos cuando el problema era el nombre del bucket.
+    """
+    c = comprobar_minio(
+        _settings(), crear_cliente=lambda: _ClienteConDenegacion(_ErrorS3("NoSuchBucket"))
+    )
+    assert c.causa == "bucket_inexistente"
+
+
+# --------------------------------------------------------------------------
+# El cliente real: qué permisos exige
+# --------------------------------------------------------------------------
+
+def test_el_cliente_lleva_region_fija():
+    """Sin `region`, minio-py llama a GetBucketLocation antes de cada operación.
+
+    Eso exige `s3:GetBucketLocation`, un permiso que GDAL NO necesita —/vsis3/
+    usa AWS_REGION directamente—, así que una policy de solo lectura válida para
+    servir tiles hacía fallar el chequeo con AccessDenied en las DOS operaciones
+    a la vez, simulando un problema de fondo. El sondeo tiene que ejercitar los
+    mismos permisos que el camino real, ni uno más.
+    """
+    from terra_tiles.health import _cliente_por_defecto
+
+    cliente = _cliente_por_defecto(_settings(aws_region="us-east-1"))
+    assert cliente._base_url.region == "us-east-1"
+
+
 def test_denegado_dos_veces_senala_la_policy():
     """Denegar también la consulta del bucket descarta que sea el ocultamiento.
 

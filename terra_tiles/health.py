@@ -337,13 +337,23 @@ def _desambiguar_acceso_denegado(cliente, bucket: str, ambiguo: Comprobacion) ->
     try:
         existe = cliente.bucket_exists(bucket)
     except Exception as e:  # noqa: BLE001
-        if getattr(e, "code", None) in ("AccessDenied", "NoSuchBucket"):
+        codigo = getattr(e, "code", None)
+        if codigo == "NoSuchBucket":
+            # Distinto de AccessDenied: acá MinIO sí nos dejó preguntar.
+            return Comprobacion(
+                "minio", ERROR,
+                "No existe ningún bucket con ese nombre. MINIO_BUCKET tiene que "
+                "coincidir con el bucket real y con GeoData__MinioBucket.",
+                causa="bucket_inexistente",
+            )
+        if codigo == "AccessDenied":
             return Comprobacion(
                 "minio", ERROR,
                 "MinIO negó tanto la lectura del objeto como la consulta del "
-                "bucket. Las credenciales son válidas, así que el problema es la "
-                "policy: revisá que esté ASIGNADA al usuario (que exista no "
-                "alcanza) y que su Resource nombre este mismo bucket.",
+                "bucket. Las credenciales son válidas, así que el problema son "
+                "los permisos: revisá que la policy esté ASIGNADA al usuario "
+                "(que exista no alcanza), que su Resource nombre este mismo "
+                "bucket, y que el usuario esté habilitado.",
                 causa="policy_no_asignada",
             )
         logger.warning("No se pudo desambiguar el AccessDenied: %s", type(e).__name__)
@@ -512,6 +522,20 @@ def _cliente_por_defecto(settings: Settings):
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,
+        # `region` NO es opcional para nosotros. Sin ella, minio-py resuelve la
+        # región llamando a `GetBucketLocation` antes de cada operación sobre un
+        # bucket que no tenga cacheado (`minio/api.py::_get_region`). Eso exige
+        # el permiso `s3:GetBucketLocation`, que **GDAL no necesita**: /vsis3/
+        # usa AWS_REGION directamente.
+        #
+        # Sin esto, una policy de solo lectura perfectamente válida para servir
+        # tiles hace fallar el chequeo con AccessDenied — y lo peor es que falla
+        # en las dos operaciones a la vez, así que parece un problema de policy
+        # de fondo en vez de un permiso puntual que sobra. Pasó de verdad.
+        #
+        # La regla: el sondeo tiene que ejercitar los mismos permisos que el
+        # camino real, ni uno más.
+        region=settings.aws_region,
         # Sin timeout explícito, minio-py reintenta y el endpoint se cuelga.
         http_client=urllib3.PoolManager(
             timeout=urllib3.Timeout(connect=TIMEOUT_SEGUNDOS, read=TIMEOUT_SEGUNDOS),
