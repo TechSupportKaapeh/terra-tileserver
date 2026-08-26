@@ -6,3 +6,6 @@ __pycache__/
 outputs/
 scripts/
 .git/
+tests/
+pytest.ini
+requirements-dev.txt

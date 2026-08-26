@@ -28,22 +28,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---- Mismo bloque de variables GDAL/VSIS3 que main.py, ANTES de importar rasterio ----
-os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("MINIO_ACCESS_KEY", "")
-os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("MINIO_SECRET_KEY", "")
-os.environ["AWS_REGION"] = os.getenv("AWS_REGION", "us-east-1")
+# Se usa EXACTAMENTE la misma configuración que el servidor, no una copia.
+# Este bloque estaba duplicado acá y arrastraba un bug ya corregido en
+# `settings.py`: no quitaba la barra final del endpoint. Un script de
+# diagnóstico configurado distinto que el servicio no diagnostica nada —
+# puede pasar cuando el servidor falla, o al revés.
+from terra_tiles.settings import Settings, configure_gdal
 
-_endpoint_raw = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-if _endpoint_raw.startswith("http://"):
-    _endpoint_raw = _endpoint_raw[len("http://"):]
-elif _endpoint_raw.startswith("https://"):
-    _endpoint_raw = _endpoint_raw[len("https://"):]
-os.environ["AWS_S3_ENDPOINT"] = _endpoint_raw
-
-os.environ["AWS_S3_ADDRESSING_STYLE"] = "path"
-os.environ["AWS_VIRTUAL_HOSTING"] = "FALSE"
-os.environ["AWS_HTTPS"] = "YES" if os.getenv("MINIO_SECURE", "false").lower() == "true" else "NO"
-os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+_settings = Settings.from_env()
+configure_gdal(_settings)
 
 
 def main() -> int:

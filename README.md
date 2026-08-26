@@ -28,11 +28,13 @@ Por eso `storage_key` guarda la **key pelada**, sin el prefijo `s3://`.
 | Variable | Obligatoria | Para qué |
 |---|---|---|
 | `MAP_TOKEN_SECRET` | **sí** | Valida el JWT que firma Geocore. Sin ella, `/cog/*` devuelve **503**. |
+| `MINIO_BUCKET` | **sí** | Único bucket del que se sirven COG. Además **acota qué rutas acepta `?url=`**: es la defensa contra SSRF. |
 | `MINIO_ENDPOINT` | sí | Host:puerto del storage. En Railway, `minio.railway.internal:9000`. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | sí | Credenciales de **solo lectura**. |
 | `MINIO_SECURE` | no | `True` si el endpoint es HTTPS. Con red privada, `False`. |
 | `AWS_REGION` | no | Default `us-east-1`. MinIO no la usa, GDAL la exige. |
 | `CORS_ALLOW_ORIGINS` | no | Default `*`. En producción, el dominio del front. |
+| `TILE_CACHE_SECONDS` | no | Default un año. Los COG son inmutables. Bajalo para invalidar rápido en pruebas. |
 | `PORT` | no | Lo inyecta Railway. Default `8001`. |
 
 ### Los dos valores que tienen que coincidir con Geocore
@@ -42,7 +44,7 @@ Esto es lo que más se rompe en deploy, porque nada lo valida y falla en silenci
 | Acá | En Geocore | Si no coinciden |
 |---|---|---|
 | `MAP_TOKEN_SECRET` | `GeoData__MapTokenSecret` | Todos los tiles dan 401 |
-| El bucket que usa el worker (`MINIO_BUCKET`) | `GeoData__MinioBucket` | TiTiler apunta a un bucket inexistente: 404 por tile |
+| `MINIO_BUCKET` | `GeoData__MinioBucket` | Geocore arma URLs de un bucket que este servicio rechaza: **400 `URL_NO_PERMITIDA`** por tile |
 
 ---
 
@@ -74,6 +76,31 @@ uvicorn main:app --reload --port 8001
 
 O desde el compose del worker, que levanta MinIO y este servicio juntos.
 
+### Correr los tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+47 tests sobre los controles de acceso y el caché. No necesitan MinIO ni GDAL:
+`terra_tiles/` no importa TiTiler a propósito, para que la lógica sea testeable
+en aislamiento. `tests/` no entra en la imagen.
+
+### Estructura
+
+```
+main.py              composición: lee config, arma dependencias, conecta
+terra_tiles/
+  settings.py        Settings (inmutable) + configure_gdal()
+  security.py        validación del token (A01) y de la ruta (A10)
+  caching.py         Cache-Control sobre /cog/tiles
+```
+
+`configure_gdal()` **tiene que correr antes de importar TiTiler**: GDAL lee sus
+variables al cargarse y fijarlas después se ignora en silencio. Por eso
+`terra_tiles/` no importa nada de la pila geoespacial.
+
 ### Verificar la conexión con MinIO
 
 ```bash
@@ -102,7 +129,12 @@ que usa TiTiler internamente. Si ese script pasa, los tiles van a funcionar.
 Para cerrar el flujo hace falta un tile real con un token de
 `GET /api/maps/token` de Geocore.
 
-- `/cog/tiles/...` sin token → **401**
-- `/cog/tiles/...` con token válido → **200** y un PNG
-- Si da **503**, falta `MAP_TOKEN_SECRET`
-- Si da **404** por tile, el bucket o la key no coinciden
+| Respuesta | Qué significa |
+|---|---|
+| **401** sin token | Correcto: el control está activo |
+| **200** + PNG con token válido | Todo el flujo funciona |
+| **503** | Falta `MAP_TOKEN_SECRET` |
+| **401** *con* token válido | El secreto no coincide con el de Geocore, o el token expiró (dura 1 h) |
+| **400 `URL_NO_PERMITIDA`** | `MINIO_BUCKET` no coincide con `GeoData__MinioBucket`, o `storage_key` quedó guardado con el prefijo `s3://` |
+| **500** | La URL pasó el filtro pero GDAL no pudo abrir el COG: la key no existe, o `tiler-ro` no tiene permiso |
+| Timeout | `MINIO_ENDPOINT` mal escrito, o los servicios están en proyectos de Railway distintos |

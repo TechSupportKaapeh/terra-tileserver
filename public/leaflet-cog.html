@@ -424,9 +424,16 @@
             }
         }
 
+        // El token de mapa se toma de la query de esta misma pagina:
+        //   /viewer?token=<el que devuelve GET /api/maps/token de Geocore>
+        const MAP_TOKEN = new URLSearchParams(location.search).get('token') || '';
+
         function buildTileUrl(rawCogPath) {
             const encodedCogPath = encodeURIComponent(rawCogPath);
-            return `http://localhost:8000/cog/tiles/WebMercatorQuad/{z}/{x}/{y}?url=${encodedCogPath}&rescale=-1,1&nodata=0&colormap_name=rdylgn`;
+            // Rutas relativas: sirve en localhost y en Railway sin recompilar.
+            return `/cog/tiles/WebMercatorQuad/{z}/{x}/{y}?url=${encodedCogPath}`
+                 + `&rescale=-1,1&nodata=0&colormap_name=rdylgn`
+                 + `&token=${encodeURIComponent(MAP_TOKEN)}`;
         }
 
         function updateSceneSummary(info, label, rawCogPath) {
@@ -454,7 +461,8 @@
             setControlsEnabled(false);
             setStatus('Cargando raster...', label || rawCogPath);
             try {
-                const infoUrl  = `http://localhost:8000/cog/info?url=${encodeURIComponent(rawCogPath)}`;
+                const infoUrl  = `/cog/info?url=${encodeURIComponent(rawCogPath)}`
+                               + `&token=${encodeURIComponent(MAP_TOKEN)}`;
                 const response = await fetch(infoUrl);
                 if (!response.ok) throw new Error(`TiTiler respondió ${response.status}`);
 
@@ -490,14 +498,14 @@
         }
 
         // ── Catálogo dinámico ──────────────────────────────────────────────────
-        // Intenta primero el endpoint REST del worker (localhost:8001/catalog).
+        // Intenta primero un endpoint /catalog; si no existe, cae a rasters.json.
         // Si no está disponible, cae al archivo estático /static/rasters.json.
         async function initCatalog() {
             setControlsEnabled(false);
             try {
                 let rasters = [];
                 try {
-                    const res = await fetch('http://localhost:8001/catalog');
+                    const res = await fetch('/catalog');
                     if (res.ok) {
                         rasters = await res.json();
                     } else {

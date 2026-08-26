@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # hacía bind mount de la carpeta. Sin mount (Railway) la imagen quedaba sin
 # main.py y el contenedor moría al arrancar.
 COPY main.py .
+COPY terra_tiles/ ./terra_tiles/
 COPY public/ ./public/
 
 # Servicio público: no correr como root.
