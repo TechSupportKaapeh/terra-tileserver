@@ -89,6 +89,15 @@ _MOTIVOS: dict[str, tuple[str, str]] = {
     ),
 }
 
+# Sub-código estable por código de S3. `acceso_denegado` además dispara un
+# segundo sondeo que lo desambigua (ver `_desambiguar_acceso_denegado`).
+_CAUSA_POR_CODIGO = {
+    "NoSuchBucket": "bucket_inexistente",
+    "InvalidAccessKeyId": "access_key_invalida",
+    "SignatureDoesNotMatch": "secret_key_invalida",
+    "AccessDenied": "acceso_denegado",
+}
+
 
 @dataclass(frozen=True)
 class Comprobacion:
@@ -233,7 +242,64 @@ def comprobar_minio(
         # Que exista es raro (la key es de sondeo) pero prueba lo mismo y mejor.
         return Comprobacion("minio", OK, "MinIO respondió y la lectura funciona.")
     except Exception as e:  # noqa: BLE001
-        return _interpretar(e, settings.minio_secure)
+        resultado = _interpretar(e, settings.minio_secure)
+
+    # `AccessDenied` es el único resultado que no permite concluir nada, así que
+    # se paga un segundo pedido solo en ese caso para desambiguarlo.
+    if resultado.causa == "acceso_denegado":
+        return _desambiguar_acceso_denegado(cliente, settings.minio_bucket, resultado)
+    return resultado
+
+
+def _desambiguar_acceso_denegado(cliente, bucket: str, ambiguo: Comprobacion) -> Comprobacion:
+    """Separa "la policy no llega" de "el bucket no se llama así".
+
+    Un `AccessDenied` sobre el objeto tiene tres explicaciones incompatibles, y
+    preguntar por el bucket las separa porque usa `s3:ListBucket`, un permiso
+    distinto del que acaba de fallar:
+
+    - responde que sí   -> la policy llega y el bucket existe. La negativa
+      anterior es MinIO ocultando un `NoSuchKey`, que es el comportamiento de S3
+      para no filtrar qué keys existen. **Los tiles funcionan.**
+    - responde que no   -> no hay ningún bucket con ese nombre.
+    - vuelve a denegar  -> el usuario no tiene la policy asignada, o la policy
+      apunta a otro bucket. Acá los tiles NO funcionan.
+
+    Si el segundo sondeo no se puede hacer, se devuelve `ambiguo` tal cual. No
+    haber podido concluir no es lo mismo que haber concluido que está roto, y
+    convertir un sondeo fallido en un diagnóstico distinto sería inventar.
+    """
+    try:
+        existe = cliente.bucket_exists(bucket)
+    except Exception as e:  # noqa: BLE001
+        if getattr(e, "code", None) in ("AccessDenied", "NoSuchBucket"):
+            return Comprobacion(
+                "minio", ERROR,
+                "MinIO negó tanto la lectura del objeto como la consulta del "
+                "bucket. Las credenciales son válidas, así que el problema es la "
+                "policy: revisá que esté ASIGNADA al usuario (que exista no "
+                "alcanza) y que su Resource nombre este mismo bucket.",
+                causa="policy_no_asignada",
+            )
+        logger.warning("No se pudo desambiguar el AccessDenied: %s", type(e).__name__)
+        return ambiguo
+
+    if existe:
+        return Comprobacion(
+            "minio", OK,
+            "El bucket existe y las credenciales llegan. La lectura de la key de "
+            "sondeo se negó porque no existe: S3 responde 403 en vez de 404 para "
+            "no filtrar qué keys hay. Los tiles de un COG real van a funcionar.",
+            causa="key_de_sondeo_inexistente",
+        )
+
+    return Comprobacion(
+        "minio", ERROR,
+        "Las credenciales llegan pero no hay ningún bucket con ese nombre. "
+        "MINIO_BUCKET tiene que coincidir con el bucket real y con "
+        "GeoData__MinioBucket de Geocore.",
+        causa="bucket_inexistente",
+    )
 
 
 def _interpretar(e: Exception, secure: bool) -> Comprobacion:
@@ -246,7 +312,7 @@ def _interpretar(e: Exception, secure: bool) -> Comprobacion:
     codigo = getattr(e, "code", None)
     if codigo in _MOTIVOS:
         estado, detalle = _MOTIVOS[codigo]
-        return Comprobacion("minio", estado, detalle)
+        return Comprobacion("minio", estado, detalle, causa=_CAUSA_POR_CODIGO.get(codigo))
 
     if codigo:
         logger.warning("MinIO devolvió un código no contemplado: %s", codigo)

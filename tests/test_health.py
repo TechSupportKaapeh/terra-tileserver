@@ -206,15 +206,72 @@ def test_errores_de_configuracion_nombran_la_variable(codigo, pista):
     assert pista in c.detalle
 
 
-def test_accessdenied_es_degradado_no_error():
-    """AccessDenied no permite concluir, y decir "roto" sería mentir.
+# --------------------------------------------------------------------------
+# AccessDenied: el único caso ambiguo, y cómo se desambigua
+# --------------------------------------------------------------------------
 
-    Puede ser una policy sin `s3:GetObject` (roto de verdad) o MinIO ocultando
-    que la key no existe (todo bien). El chequeo lo dice en vez de adivinar.
+class _ClienteConDenegacion:
+    """Niega el objeto y responde lo que se le diga sobre el bucket.
+
+    Reproduce el escenario real: `stat_object` da AccessDenied y `bucket_exists`
+    —que usa un permiso distinto, `s3:ListBucket`— decide qué significaba.
     """
+
+    def __init__(self, bucket) -> None:
+        self._bucket = bucket
+
+    def stat_object(self, bucket, key):
+        raise _ErrorS3("AccessDenied")
+
+    def bucket_exists(self, bucket):
+        if isinstance(self._bucket, BaseException):
+            raise self._bucket
+        return self._bucket
+
+
+def test_denegado_pero_el_bucket_existe_es_ok():
+    """S3 responde 403 en vez de 404 para no filtrar qué keys existen.
+
+    Si el bucket se puede consultar, la negativa era eso y los tiles funcionan.
+    """
+    c = comprobar_minio(_settings(), crear_cliente=lambda: _ClienteConDenegacion(True))
+    assert (c.estado, c.causa) == (OK, "key_de_sondeo_inexistente")
+
+
+def test_denegado_y_el_bucket_no_existe_senala_el_nombre():
+    c = comprobar_minio(_settings(), crear_cliente=lambda: _ClienteConDenegacion(False))
+    assert (c.estado, c.causa) == (ERROR, "bucket_inexistente")
+    assert "MINIO_BUCKET" in c.detalle
+
+
+def test_denegado_dos_veces_senala_la_policy():
+    """Denegar también la consulta del bucket descarta que sea el ocultamiento.
+
+    Las credenciales son válidas (si no, sería SignatureDoesNotMatch), así que
+    lo que falla es que la policy no llega a este usuario o a este bucket.
+    """
+    c = comprobar_minio(
+        _settings(), crear_cliente=lambda: _ClienteConDenegacion(_ErrorS3("AccessDenied"))
+    )
+    assert (c.estado, c.causa) == (ERROR, "policy_no_asignada")
+    assert "ASIGNADA" in c.detalle
+
+
+def test_si_el_segundo_sondeo_falla_se_vuelve_al_estado_ambiguo():
+    """No haber podido concluir no es haber concluido que está roto.
+
+    Convertir un sondeo fallido en un diagnóstico distinto sería inventar: se
+    devuelve el `degradado` original, que ya dice que no se puede concluir.
+    """
+    c = comprobar_minio(
+        _settings(), crear_cliente=lambda: _ClienteConDenegacion(OSError("connection reset"))
+    )
+    assert c.estado == DEGRADADO
+
+
+def test_un_cliente_sin_bucket_exists_tampoco_rompe():
     c = comprobar_minio(_settings(), crear_cliente=lambda: _ClienteQueFalla(_ErrorS3("AccessDenied")))
     assert c.estado == DEGRADADO
-    assert c.ok is True
 
 
 def test_codigo_desconocido_es_error():
