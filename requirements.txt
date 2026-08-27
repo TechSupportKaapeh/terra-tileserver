@@ -5,6 +5,16 @@ titiler.core==0.18.0
 aiofiles
 PyJWT==2.8.0
 
+# Composición de varias pasadas al vuelo (DECISIONS #19 y #20). Misma versión
+# que titiler.core: las dos tienen que moverse juntas.
+titiler.mosaic==0.18.0
+
+# Lo exige `cogeo_mosaic.backends.s3.S3Backend` para leer un MosaicJSON del
+# bucket. No comparte configuración con GDAL: el endpoint de MinIO se le pasa
+# por AWS_ENDPOINT_URL_S3 desde `configure_gdal()`. Sin boto3, cualquier
+# `?url=s3://...` contra /mosaic falla con un AssertionError.
+boto3
+
 # Lo usa `terra_tiles/health.py` para sondear MinIO en /health/ready, y también
 # scripts/check_titiler_minio.py. Era solo del script hasta que el readiness
 # check pasó a depender de él: si se saca, /health/ready revienta al importar.

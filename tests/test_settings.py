@@ -67,3 +67,25 @@ class TestConfigureGdal:
         import os
         assert os.environ["AWS_S3_ADDRESSING_STYLE"] == "path"
         assert os.environ["AWS_VIRTUAL_HOSTING"] == "FALSE"
+
+    def test_configura_tambien_boto3_con_el_endpoint_de_minio(self, monkeypatch):
+        """boto3 no comparte NINGUNA variable con GDAL.
+
+        Lo usa cogeo-mosaic para leer un MosaicJSON del bucket (`S3Backend` crea
+        su cliente sin `endpoint_url`). Sin esto apuntaría a AWS de verdad, y el
+        fallo sería un timeout contra un bucket ajeno, no un error de config.
+        """
+        monkeypatch.setenv("MINIO_ENDPOINT", "minio.railway.internal:9000")
+        monkeypatch.setenv("MINIO_SECURE", "false")
+        configure_gdal(Settings.from_env())
+        import os
+        assert os.environ["AWS_ENDPOINT_URL_S3"] == "http://minio.railway.internal:9000"
+        # GDAL lo quiere pelado, boto3 con esquema: son formatos distintos.
+        assert os.environ["AWS_S3_ENDPOINT"] == "minio.railway.internal:9000"
+
+    def test_el_endpoint_de_boto3_respeta_minio_secure(self, monkeypatch):
+        monkeypatch.setenv("MINIO_ENDPOINT", "bucket-x.up.railway.app")
+        monkeypatch.setenv("MINIO_SECURE", "true")
+        configure_gdal(Settings.from_env())
+        import os
+        assert os.environ["AWS_ENDPOINT_URL_S3"] == "https://bucket-x.up.railway.app"

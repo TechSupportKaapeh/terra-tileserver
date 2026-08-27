@@ -39,6 +39,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from rio_tiler.errors import TileOutsideBounds
 from titiler.core.factory import TilerFactory
+from titiler.mosaic.factory import MosaicTilerFactory
 
 from terra_tiles.caching import CacheControlMiddleware
 from terra_tiles.health import informe
@@ -113,12 +114,25 @@ async def tile_outside_bounds_handler(request: Request, exc: TileOutsideBounds) 
     return Response(status_code=200, content=_TRANSPARENT_PNG, media_type="image/png")
 
 
+# Los dos routers comparten los mismos controles: el token decide QUIÉN pide, y
+# el validador de ruta decide QUÉ puede pedirse. Se construyen una sola vez para
+# que no puedan divergir entre endpoints.
+verificar_token = Depends(crear_validador_de_token(settings.map_token_secret,
+                                                   settings.token_leeway_seconds))
+validar_ruta = crear_validador_de_ruta(settings.prefijo_valido)
+
 # Endpoints COG: /cog/tiles/{TileMatrixSetId}/{z}/{x}/{y}, /cog/info, /cog/bounds…
-cog = TilerFactory(path_dependency=crear_validador_de_ruta(settings.prefijo_valido))
-app.include_router(
-    cog.router,
-    prefix="/cog",
-    tags=["COG"],
-    dependencies=[Depends(crear_validador_de_token(settings.map_token_secret,
-                                                   settings.token_leeway_seconds))],
-)
+cog = TilerFactory(path_dependency=validar_ruta)
+app.include_router(cog.router, prefix="/cog", tags=["COG"], dependencies=[verificar_token])
+
+# Endpoints MosaicJSON: componen varias pasadas al vuelo (DECISIONS #19 y #20).
+# `?url=` apunta acá a un MosaicJSON en el bucket, no a un COG.
+#
+# ⚠️ El validador de ruta acota el MosaicJSON, pero **no los assets que ese
+# documento lista adentro**: cogeo-mosaic los abre tal como vengan. Hoy eso está
+# contenido porque solo `worker-rw` puede escribir en el bucket, así que un
+# MosaicJSON solo puede aparecer ahí si lo puso el worker. Si alguna vez se
+# aceptan mosaicos de otro origen, hay que validar también los assets.
+mosaico = MosaicTilerFactory(path_dependency=validar_ruta)
+app.include_router(mosaico.router, prefix="/mosaic", tags=["MosaicJSON"],
+                   dependencies=[verificar_token])
