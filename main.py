@@ -17,12 +17,22 @@ Controles de acceso y su categoría OWASP:
 """
 from __future__ import annotations
 
+import os
 from base64 import b64decode
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 load_dotenv()  # antes de leer la config
+
+# Antes de cualquier otra cosa del servicio: hasta que esto no corre, un
+# `logger.info` de `terra_tiles.*` se descarta y un `logger.error` sale sin
+# formato por `logging.lastResort`. Uvicorn no configura el root — solo sus
+# tres loggers propios — y lo hace en `Config.__init__`, o sea **antes** de
+# importar este archivo, asi que aca se le agrega lo que falta sin pisarlo.
+from terra_tiles.logging_config import configurar_logging
+
+configurar_logging()
 
 from terra_tiles.settings import Settings, configure_gdal
 
@@ -41,6 +51,7 @@ from rio_tiler.errors import TileOutsideBounds
 from titiler.core.factory import TilerFactory
 from titiler.mosaic.factory import MosaicTilerFactory
 
+from terra_tiles.arranque import registrar_arranque
 from terra_tiles.caching import CacheControlMiddleware
 from terra_tiles.health import informe
 from terra_tiles.security import crear_validador_de_ruta, crear_validador_de_token
@@ -136,3 +147,16 @@ app.include_router(cog.router, prefix="/cog", tags=["COG"], dependencies=[verifi
 mosaico = MosaicTilerFactory(path_dependency=validar_ruta)
 app.include_router(mosaico.router, prefix="/mosaic", tags=["MosaicJSON"],
                    dependencies=[verificar_token])
+
+
+# Lo ultimo del archivo, cuando los routers ya estan montados: recien aca el
+# reporte describe el servicio que efectivamente va a atender.
+#
+# Va a nivel de modulo y no en un evento de startup **a proposito**. En el
+# worker, `serve()` de Inngest levantaba durante el import y el evento
+# `startup` nunca llegaba a dispararse, asi que el reporte escrito para
+# explicar la falla no se imprimia. Un diagnostico que solo aparece cuando todo
+# anda no sirve de nada.
+#
+# `registrar_arranque` no levanta: atrapa lo suyo y devuelve.
+registrar_arranque(settings, os.environ)
