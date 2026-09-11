@@ -389,7 +389,7 @@
           <textarea id="supabase" spellcheck="false" autocomplete="off" placeholder="eyJhbGciOiJIUzI1NiIs…"></textarea>
         </label>
         <div class="botones"><button id="btn-pedir-token" type="button">Pedir token de mapa</button></div>
-        <div class="nota">Si falla sin código HTTP, es CORS: Geocore tiene que tener el origen de esta página en <code>Cors__Origins__N</code>. Alternativa sin tocar nada: en terra-admin, pestaña Network, copiá la respuesta de <code>/api/maps/token</code>.</div>
+        <div class="nota" id="nota-cors"></div>
       </details>
       <div id="res-token" class="resultado"></div>
     </section>
@@ -1100,7 +1100,32 @@
     t.addEventListener("click", function () { seleccionarTab(t.id); });
   });
 
+  // ---------------------------------------------------------------- CORS de Geocore
+  // Pedirle el token o las capas a Geocore sólo funciona si Geocore acepta el
+  // origen de esta página. En vez de explicarlo en abstracto, se muestra el
+  // valor exacto que hay que cargar, calculado desde donde está abierta.
+  function notaCors() {
+    var n = $("nota-cors");
+    // Abierta como archivo, el navegador manda `Origin: null`. Geocore no
+    // debería aceptarlo: `null` es también el origen de cualquier iframe con
+    // sandbox y de cualquier otro archivo local, así que permitirlo abre CORS
+    // a mucho más que este piloto.
+    if (location.protocol === "file:" || location.origin === "null") {
+      n.className = "nota warn";
+      llenar(n, document.createTextNode(
+        "Abierta como archivo, esta página no tiene origen y Geocore no la va a aceptar (ni debería). " +
+        "Abrila desde /piloto del tileserver, o pegá el token a mano arriba."));
+      return;
+    }
+    n.className = "nota";
+    llenar(n,
+      document.createTextNode("Para que esto funcione, Geocore tiene que aceptar este origen. En Railway, servicio Geocore, agregá "),
+      el("code", { text: "Cors__Origins__N = " + location.origin }),
+      document.createTextNode(" con N el próximo índice libre. Mientras tanto, en terra-admin, pestaña Network, copiá la respuesta de /api/maps/token y pegala arriba."));
+  }
+
   // ---------------------------------------------------------------- arranque
+  notaCors();
   $("base").value = baseInicial();
   leerPrefs();
   if (!$("cog").value) $("cog").value = "s3://terra-assets/pruebas/test_cog.tif";
