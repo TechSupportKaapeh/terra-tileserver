@@ -115,6 +115,18 @@ def viewer():
     return FileResponse(_PUBLIC / "leaflet-cog.html")
 
 
+@app.get("/piloto")
+def piloto():
+    """Piloto para el front: cómo pintar un COG en un mapa, paso a paso.
+
+    Se sirve desde acá y no sólo como archivo suelto por dos motivos: queda en
+    el mismo origen que TiTiler —así las llamadas a `/cog/*` no dependen de
+    CORS— y hereda el HTTPS de Railway sin configurar nada. Sin token, igual
+    que `/viewer`: la página es pública, los tiles que pide no.
+    """
+    return FileResponse(_PUBLIC / "piloto.html")
+
+
 @app.exception_handler(TileOutsideBounds)
 async def tile_outside_bounds_handler(request: Request, exc: TileOutsideBounds) -> Response:
     """Fuera de los bordes del raster: PNG transparente, no error.

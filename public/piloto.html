@@ -1,0 +1,1111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piloto TiTiler · Terra</title>
+<!--
+  Piloto para el front: como pintar en un mapa un COG que sirve el tileserver.
+
+  Es una sola pagina, sin build. Se puede abrir de dos formas:
+
+    1. Servida por el tileserver:  https://<tileserver>/piloto
+       Mismo origen que TiTiler, HTTPS de Railway, cero configuracion.
+    2. Como archivo local (doble click). Hay que escribir la URL del
+       tileserver en el paso 1; funciona porque el tileserver tiene CORS "*".
+
+  No hace falta ngrok para nada de esto: Railway ya sirve HTTPS.
+
+  Nunca guarda tokens en el navegador. Recuerda las URLs y la ultima
+  configuracion, pero el token de mapa y el JWT de Supabase viven solo en
+  memoria: son credenciales, y localStorage es lo primero que se lleva un XSS.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  :root {
+    --ground: #f4f6f5;
+    --surface: #ffffff;
+    --surface-2: #eef1f2;
+    --ink: #1b2530;
+    --muted: #5b6875;
+    --rule: #d8dee2;
+    --accent: #2d4f6b;
+    --accent-soft: #e3ebf2;
+    --ok: #2f7d4f;
+    --ok-soft: #e2f1e8;
+    --warn: #9a620f;
+    --warn-soft: #fbf0dc;
+    --bad: #a23b2a;
+    --bad-soft: #f8e4e0;
+    /* Colores de la anatomia de la URL: quien pone cada parte. */
+    --seg-geocore: #2d4f6b;
+    --seg-front: #7a4a9e;
+    --seg-token: #9a620f;
+    --display: "Chivo", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --radius: 6px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f151b;
+      --surface: #151e27;
+      --surface-2: #1b2631;
+      --ink: #e4ebf0;
+      --muted: #93a3b1;
+      --rule: #2a3744;
+      --accent: #86afd1;
+      --accent-soft: #1c2b39;
+      --ok: #6cc08e;
+      --ok-soft: #16291f;
+      --warn: #e0a64a;
+      --warn-soft: #2d2415;
+      --bad: #e7806d;
+      --bad-soft: #321b17;
+      --seg-geocore: #86afd1;
+      --seg-front: #c49be6;
+      --seg-token: #e0a64a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0f151b;
+    --surface: #151e27;
+    --surface-2: #1b2631;
+    --ink: #e4ebf0;
+    --muted: #93a3b1;
+    --rule: #2a3744;
+    --accent: #86afd1;
+    --accent-soft: #1c2b39;
+    --ok: #6cc08e;
+    --ok-soft: #16291f;
+    --warn: #e0a64a;
+    --warn-soft: #2d2415;
+    --bad: #e7806d;
+    --bad-soft: #321b17;
+    --seg-geocore: #86afd1;
+    --seg-front: #c49be6;
+    --seg-token: #e0a64a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font: 14px/1.5 var(--body);
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: minmax(340px, 420px) 1fr;
+    height: 100vh;
+  }
+
+  /* ------------------------------------------------------------ panel */
+  .panel {
+    overflow-y: auto;
+    border-right: 1px solid var(--rule);
+    background: var(--surface);
+    padding: 20px 20px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .eyebrow {
+    font: 600 11px/1 var(--body);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1 {
+    font: 700 22px/1.2 var(--display);
+    margin: 6px 0 6px;
+    text-wrap: balance;
+  }
+  .lead { margin: 0; color: var(--muted); }
+
+  .flujo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font: 500 12px/1.3 var(--mono);
+  }
+  .flujo span {
+    padding: 4px 8px;
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+  .flujo i { color: var(--muted); font-style: normal; }
+
+  .paso {
+    border-top: 1px solid var(--rule);
+    padding-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .paso-cab { display: flex; align-items: baseline; gap: 10px; }
+  .num {
+    font: 700 13px/1 var(--display);
+    color: var(--surface);
+    background: var(--accent);
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    display: inline-grid; place-items: center;
+    flex: none;
+  }
+  h2 { font: 700 16px/1.25 var(--display); margin: 0; }
+  .paso p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  input[type="text"], input[type="number"], input[type="url"], textarea, select {
+    font: 13px/1.4 var(--mono);
+    color: var(--ink);
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    width: 100%;
+  }
+  textarea { resize: vertical; min-height: 64px; word-break: break-all; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, summary:focus-visible, .tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .fila { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+  button {
+    font: 600 13px/1 var(--body);
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: var(--surface);
+    cursor: pointer;
+  }
+  button.sec { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .botones { display: flex; flex-wrap: wrap; gap: 6px; }
+  .botones button { font-size: 12px; padding: 7px 10px; }
+
+  details {
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    background: var(--surface-2);
+  }
+  details[open] { display: flex; flex-direction: column; gap: 8px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+
+  .nota {
+    font-size: 12.5px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    color: var(--ink);
+  }
+  .nota.warn { background: var(--warn-soft); }
+  .nota.bad { background: var(--bad-soft); }
+  .nota.ok { background: var(--ok-soft); }
+  .nota strong { font-weight: 600; }
+  .nota code, .paso code, .drawer code {
+    font: 12px var(--mono);
+    background: var(--surface-2);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* resultado de una llamada: estado + detalle */
+  .resultado { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+  .resultado:empty { display: none; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 11.5px/1 var(--mono);
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    width: fit-content;
+  }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.bad { background: var(--bad-soft); color: var(--bad); }
+
+  dl.claims {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 12px;
+    margin: 0;
+    font-size: 12.5px;
+  }
+  dl.claims dt { color: var(--muted); font-family: var(--mono); }
+  dl.claims dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+
+  .capas { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
+  .capa {
+    text-align: left;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    font: 12px/1.35 var(--mono);
+    padding: 6px 8px;
+  }
+  .capa:hover { border-color: var(--accent); }
+
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+  /* ------------------------------------------------------------ mapa */
+  .escena { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  .mapa-caja { position: relative; min-height: 0; }
+  #mapa { position: absolute; inset: 0; background: var(--surface-2); }
+
+  .leyenda, .lectura {
+    position: absolute;
+    z-index: 500;
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  }
+  .leyenda { right: 12px; bottom: 24px; width: 230px; }
+  .leyenda .barra { height: 12px; border-radius: 3px; margin: 6px 0 4px; border: 1px solid var(--rule); }
+  .leyenda .extremos { display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .lectura { left: 56px; top: 12px; max-width: 320px; }
+  .lectura strong { font: 600 18px/1.2 var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ------------------------------------------------------------ cajon inferior */
+  .drawer { border-top: 1px solid var(--rule); background: var(--surface); height: 38vh; display: flex; flex-direction: column; min-height: 0; }
+  .tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--rule); overflow-x: auto; flex: none; }
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    padding: 11px 12px 9px;
+    border-radius: 0;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .tabpanel { overflow: auto; padding: 14px 16px 20px; flex: 1; min-height: 0; }
+  .tabpanel h3 { font: 700 14px/1.3 var(--display); margin: 14px 0 6px; }
+  .tabpanel h3:first-child { margin-top: 0; }
+  .tabpanel p { margin: 0 0 8px; max-width: 78ch; }
+
+  .url {
+    font: 12.5px/1.6 var(--mono);
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    overflow-wrap: anywhere;
+  }
+  .seg-base { color: var(--muted); }
+  .seg-geocore { color: var(--seg-geocore); font-weight: 500; }
+  .seg-front { color: var(--seg-front); font-weight: 500; }
+  .seg-token { color: var(--seg-token); font-weight: 500; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  .tabla-caja { overflow-x: auto; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+  td code { white-space: nowrap; }
+  .quien { font: 600 11px var(--mono); }
+
+  pre.codigo {
+    font: 12px/1.55 var(--mono);
+    background: var(--ground);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 0 0 8px;
+    tab-size: 2;
+  }
+
+  ol.trampas { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; max-width: 80ch; }
+  ol.trampas strong { font-weight: 600; }
+
+  .miniatura { image-rendering: pixelated; width: 96px; height: 96px; border: 1px solid var(--rule); background: repeating-conic-gradient(var(--surface-2) 0 25%, var(--surface) 0 50%) 0 0 / 12px 12px; }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    .panel { border-right: none; border-bottom: 1px solid var(--rule); }
+    .escena { height: 100vh; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- =============================================================== PANEL -->
+  <aside class="panel">
+    <header>
+      <div class="eyebrow">Terra · tileserver</div>
+      <h1>Cómo pintar un COG en el mapa</h1>
+      <p class="lead">Cuatro pasos, en el mismo orden en que los va a hacer el front. Cada paso llama al servicio de verdad.</p>
+    </header>
+
+    <div class="flujo" aria-label="Flujo de un tile">
+      <span>front</span><i>→</i><span>Geocore /api/maps/token</span><i>→</i><span>TiTiler /cog/tiles</span><i>→</i><span>MinIO</span>
+    </div>
+
+    <!-- ---------------------------------------------------------- 1 -->
+    <section class="paso">
+      <div class="paso-cab"><span class="num">1</span><h2>El servidor de tiles</h2></div>
+      <p>TiTiler es un servidor HTTP: recibe <code>z/x/y</code> y la ruta de un COG, lee del bucket solo los bytes de esa zona y devuelve un PNG. No hay que instalar nada en el front.</p>
+      <label>URL del tileserver
+        <input id="base" type="url" spellcheck="false" autocomplete="off">
+      </label>
+      <div class="botones"><button id="btn-salud" class="sec" type="button">Probar /health/ready</button></div>
+      <div id="res-salud" class="resultado"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- 2 -->
+    <section class="paso">
+      <div class="paso-cab"><span class="num">2</span><h2>El token de mapa</h2></div>
+      <p>Cada tile necesita <code>&amp;token=…</code>. Lo emite Geocore en <code>GET /api/maps/token</code>, firmado con el secreto que comparte con el tileserver. <strong>Dura una hora.</strong></p>
+      <label>Token de mapa
+        <textarea id="token" spellcheck="false" autocomplete="off" placeholder="eyJhbGciOiJIUzI1NiIs…"></textarea>
+      </label>
+      <details id="det-geocore">
+        <summary>Pedírselo a Geocore con tu sesión</summary>
+        <label>URL de Geocore
+          <input id="geocore" type="url" spellcheck="false" autocomplete="off" placeholder="https://<geocore>.up.railway.app">
+        </label>
+        <label>Access token de Supabase (el de tu sesión en terra-admin)
+          <textarea id="supabase" spellcheck="false" autocomplete="off" placeholder="eyJhbGciOiJIUzI1NiIs…"></textarea>
+        </label>
+        <div class="botones"><button id="btn-pedir-token" type="button">Pedir token de mapa</button></div>
+        <div class="nota">Si falla sin código HTTP, es CORS: Geocore tiene que tener el origen de esta página en <code>Cors__Origins__N</code>. Alternativa sin tocar nada: en terra-admin, pestaña Network, copiá la respuesta de <code>/api/maps/token</code>.</div>
+      </details>
+      <div id="res-token" class="resultado"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- 3 -->
+    <section class="paso">
+      <div class="paso-cab"><span class="num">3</span><h2>El COG y sus metadatos</h2></div>
+      <p>El worker guarda un COG por índice y fecha. TiTiler lo encuentra por <code>?url=s3://…</code>; sólo acepta rutas dentro del bucket.</p>
+      <label>Ruta del COG
+        <input id="cog" type="text" spellcheck="false" autocomplete="off" placeholder="s3://terra-assets/parcelas/<id>/<fecha>_ndvi.tif">
+      </label>
+      <details id="det-capas">
+        <summary>Elegir de las capas de Geocore</summary>
+        <p>Usa la URL de Geocore y el token de Supabase del paso 2. <code>/api/layers</code> sí exige <code>X-Tenant-ID</code>.</p>
+        <div class="fila">
+          <label>X-Tenant-ID <input id="tenant" type="text" spellcheck="false" autocomplete="off"></label>
+          <label>parcelaId (opcional) <input id="parcela" type="text" spellcheck="false" autocomplete="off"></label>
+        </div>
+        <div class="botones"><button id="btn-capas" type="button">Listar capas</button></div>
+        <div id="lista-capas" class="capas"></div>
+      </details>
+      <div class="botones"><button id="btn-info" type="button">Leer /cog/info y /cog/statistics</button></div>
+      <div id="res-info" class="resultado"></div>
+    </section>
+
+    <!-- ---------------------------------------------------------- 4 -->
+    <section class="paso">
+      <div class="paso-cab"><span class="num">4</span><h2>Cómo se pinta</h2></div>
+      <p>El COG guarda <strong>NDVI crudo</strong>: números entre -1 y 1, no colores. Para dibujarlo, TiTiler necesita saber qué rango estirar (<code>rescale</code>) y con qué paleta (<code>colormap_name</code>). Geocore no los agrega: los pone el front.</p>
+      <div class="fila">
+        <label>rescale mín <input id="rmin" type="number" step="0.01" value="-1"></label>
+        <label>rescale máx <input id="rmax" type="number" step="0.01" value="1"></label>
+      </div>
+      <div class="botones">
+        <button class="sec" type="button" data-rango="-1,1">Fijo -1 … 1</button>
+        <button class="sec" type="button" data-rango="0,0.9">Vegetación 0 … 0.9</button>
+        <button class="sec" type="button" id="btn-p2p98" disabled>Contraste p2 … p98</button>
+      </div>
+      <div class="nota"><strong>Fijo o por contraste.</strong> Un rango fijo hace comparables las parcelas y las fechas: el mismo verde es el mismo NDVI. El de percentiles da más contraste dentro de una parcela, pero dos parcelas con el mismo color pueden tener NDVI distinto. Para un dashboard agrícola conviene el fijo.</div>
+      <label>Paleta (colormap_name)
+        <select id="cmap">
+          <option value="rdylgn">rdylgn — rojo, amarillo, verde (NDVI)</option>
+          <option value="ylgn">ylgn — amarillo a verde</option>
+          <option value="greens">greens</option>
+          <option value="viridis">viridis</option>
+          <option value="spectral">spectral</option>
+          <option value="rdbu">rdbu — divergente (cambios)</option>
+        </select>
+      </label>
+      <label>Opacidad <input id="opacidad" type="range" min="0.2" max="1" step="0.05" value="0.85"></label>
+      <div class="botones"><button id="btn-pintar" type="button">Pintar en el mapa</button></div>
+      <div id="res-pintar" class="resultado"></div>
+    </section>
+  </aside>
+
+  <!-- =============================================================== ESCENA -->
+  <main class="escena">
+    <div class="mapa-caja">
+      <div id="mapa" role="application" aria-label="Mapa"></div>
+      <div class="lectura" id="lectura">
+        <div class="eyebrow">Valor del píxel</div>
+        <div id="lectura-cuerpo">Pintá una capa y hacé click en el mapa: se consulta <code>/cog/point/{lon},{lat}</code>.</div>
+      </div>
+      <div class="leyenda" id="leyenda" hidden>
+        <div class="eyebrow" id="leyenda-titulo">NDVI</div>
+        <div class="barra" id="leyenda-barra"></div>
+        <div class="extremos"><span id="leyenda-min">-1</span><span id="leyenda-max">1</span></div>
+      </div>
+    </div>
+
+    <section class="drawer" aria-label="Detalle">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" aria-controls="tp-url" id="t-url" type="button">La URL</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="tp-codigo" id="t-codigo" type="button">Código para terra-admin</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="tp-diag" id="t-diag" type="button">Diagnóstico</button>
+        <button class="tab" role="tab" aria-selected="false" aria-controls="tp-trampas" id="t-trampas" type="button">Trampas</button>
+      </div>
+
+      <!-- ---------------------------------------------- URL -->
+      <div class="tabpanel" role="tabpanel" id="tp-url" aria-labelledby="t-url">
+        <h3>Lo que te da Geocore</h3>
+        <p><code>GET /api/layers/{id}</code> devuelve <code>tiles[0]</code> con el servidor y la ruta del COG, y nada más:</p>
+        <div class="url" id="url-geocore">—</div>
+        <h3>Lo que tiene que pedir el mapa</h3>
+        <p>La misma plantilla, más tres parámetros que agrega el front. Leaflet reemplaza <code>{z}/{x}/{y}</code> por cada tile.</p>
+        <div class="url" id="url-final">—</div>
+        <div class="tabla-caja">
+          <table>
+            <thead><tr><th>Parte</th><th>Lo pone</th><th>Para qué</th></tr></thead>
+            <tbody>
+              <tr><td><code>/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x</code></td><td class="quien seg-geocore">Geocore</td><td>El tile pedido, en la grilla de Leaflet (Web Mercator).</td></tr>
+              <tr><td><code>url=s3://terra-assets/…</code></td><td class="quien seg-geocore">Geocore</td><td>Qué archivo leer. El tileserver rechaza con 400 cualquier cosa fuera de <code>s3://terra-assets/</code>.</td></tr>
+              <tr><td><code>rescale=mín,máx</code></td><td class="quien seg-front">front</td><td>Qué valores van al principio y al final de la paleta. Sin esto, un float de -1 a 1 no se ve.</td></tr>
+              <tr><td><code>colormap_name=…</code></td><td class="quien seg-front">front</td><td>La paleta. Tiene que coincidir con la leyenda que muestre la UI.</td></tr>
+              <tr><td><code>token=…</code></td><td class="quien seg-token">front, cada hora</td><td>El token de mapa. Sin él: 401.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="botones" style="margin-top:10px">
+          <button class="sec" id="btn-copiar-tile" type="button" disabled>Copiar la URL de un tile real (para abrir en otra pestaña)</button>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------- CODIGO -->
+      <div class="tabpanel" role="tabpanel" id="tp-codigo" aria-labelledby="t-codigo" hidden>
+        <p>terra-admin ya tiene un <code>MapContainer</code> con OpenStreetMap en <code>GeometryView.tsx</code>. La capa del COG es un <code>TileLayer</code> más, adentro del mismo mapa. El código se actualiza con lo que elijas en el paso 4; <strong>el token nunca se escribe acá</strong>: llega por props.</p>
+        <pre class="codigo" id="codigo"></pre>
+        <div class="botones"><button class="sec" id="btn-copiar-codigo" type="button">Copiar código</button></div>
+      </div>
+
+      <!-- ---------------------------------------------- DIAGNOSTICO -->
+      <div class="tabpanel" role="tabpanel" id="tp-diag" aria-labelledby="t-diag" hidden>
+        <p>Leaflet dibuja los tiles con <code>&lt;img&gt;</code>, y una imagen que falla no dice por qué: el mapa sólo muestra huecos. Este botón pide un tile con <code>fetch()</code> y muestra el código HTTP y el cuerpo. Se corre solo la primera vez que un tile falla.</p>
+        <div class="botones"><button id="btn-probar" type="button" disabled>Probar el tile del centro</button></div>
+        <div id="res-diag" class="resultado" style="margin-top:10px"></div>
+        <h3>Qué significa cada respuesta</h3>
+        <div class="tabla-caja">
+          <table>
+            <thead><tr><th>Código</th><th>Qué pasó</th><th>Qué hacer</th></tr></thead>
+            <tbody>
+              <tr><td><code>200</code> PNG chico</td><td>El tile cae fuera del raster. TiTiler devuelve un PNG transparente a propósito, no un error.</td><td>Nada. Si todo el mapa está vacío, revisá los bounds.</td></tr>
+              <tr><td><code>401</code> falta</td><td>La URL no trae <code>token</code>.</td><td>Agregar <code>&amp;token=…</code>.</td></tr>
+              <tr><td><code>401</code> expiró</td><td>Pasó la hora.</td><td>Pedir otro a <code>/api/maps/token</code> y actualizar la <code>url</code> de la capa.</td></tr>
+              <tr><td><code>401</code> inválido</td><td>La firma no cierra: el <code>MAP_TOKEN_SECRET</code> del tileserver no es igual a <code>GeoData__MapTokenSecret</code> de Geocore, o pegaste el JWT de Supabase.</td><td>Usar el token de <code>/api/maps/token</code>; si ya es ése, comparar los dos secretos.</td></tr>
+              <tr><td><code>403</code></td><td>Token firmado pero no es de tipo mapa.</td><td>Usar el de <code>/api/maps/token</code>.</td></tr>
+              <tr><td><code>400</code></td><td>La <code>url</code> no está bajo <code>s3://terra-assets/</code> o tiene <code>..</code>. Es la defensa contra SSRF.</td><td>Revisar la ruta del COG.</td></tr>
+              <tr><td><code>404</code></td><td>Normalmente, el archivo no existe en esa ruta.</td><td>Revisar la <code>storageKey</code>.</td></tr>
+              <tr><td><code>503</code></td><td>Al tileserver le falta <code>MAP_TOKEN_SECRET</code>.</td><td>Configurarlo en Railway.</td></tr>
+              <tr><td><code>500</code></td><td>Error del lado del servidor, casi siempre llegando a MinIO.</td><td>Mirar el log del tileserver: el reporte de arranque dice si MinIO conecta.</td></tr>
+              <tr><td>sin código</td><td>El navegador no recibió respuesta: URL mal, servicio caído, o CORS.</td><td>Probar <code>/health/ready</code> en el paso 1.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ---------------------------------------------- TRAMPAS -->
+      <div class="tabpanel" role="tabpanel" id="tp-trampas" aria-labelledby="t-trampas" hidden>
+        <ol class="trampas">
+          <li><strong>La URL de Geocore no alcanza.</strong> <code>tiles[0]</code> trae el servidor y el COG, pero no <code>rescale</code>, <code>colormap_name</code> ni <code>token</code>. Usada tal cual, da 401; con token y sin rescale, el NDVI se ve mal.</li>
+          <li><strong>El token dura una hora.</strong> Cuando vence, cada tile nuevo da 401 y el mapa se llena de huecos sin ningún error visible. Hay que pedir otro antes de que venza y cambiar la <code>url</code> del <code>TileLayer</code>; react-leaflet llama a <code>setUrl</code> cuando la prop cambia.</li>
+          <li><strong>No pongas <code>nodata=0</code>.</strong> El COG trae máscara interna (el worker lo convierte con <code>add_mask=True</code>), así que TiTiler ya sabe qué píxeles están vacíos. Y NDVI = 0 es un valor real: agua y suelo desnudo andan por ahí. El <code>/viewer</code> viejo lo pasa y los borra.</li>
+          <li><strong>El zoom nativo sale de <code>/cog/info</code>.</strong> Geocore devuelve <code>maxzoom: 18</code> fijo. Si lo usás como <code>maxNativeZoom</code>, pedís tiles más finos que el raster (10 m por píxel) y TiTiler los agranda en el servidor. Usá el <code>maxzoom</code> de <code>/cog/info</code> como <code>maxNativeZoom</code> y dejá <code>maxZoom</code> alto.</li>
+          <li><strong>La leyenda tiene que salir de los mismos parámetros.</strong> Si el mapa usa <code>rescale=0,0.9</code> y la leyenda dice -1 … 1, el usuario lee mal los colores. El piloto arma la leyenda desde <code>/cog/colorMaps/{nombre}</code> y el mismo rango.</li>
+          <li><strong>Codificá la ruta del COG.</strong> Geocore pone <code>url=s3://…</code> sin codificar. Hoy anda porque las keys del worker son uuid y fechas; si alguna vez aparece un espacio, un <code>&amp;</code> o un <code>#</code>, se rompe. <code>URLSearchParams</code> lo resuelve.</li>
+          <li><strong>HTTPS no requiere ngrok.</strong> Railway ya sirve el tileserver en <code>https://…up.railway.app</code>. ngrok sirve para exponer algo que corre en tu máquina; nada de esto corre en tu máquina.</li>
+          <li><strong>Los colores del heatmap del worker no son esta paleta.</strong> El PNG de <code>generate-heatmap-on-demand</code> usa una paleta propia de 17 colores; <code>rdylgn</code> se le parece pero no es igual. Si la UI muestra los dos, conviene avisarlo o unificarlo.</li>
+        </ol>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------- utilidades
+  var $ = function (id) { return document.getElementById(id); };
+
+  // Todo lo que llega del usuario o de un servicio se inserta como texto, nunca
+  // como HTML: el token, la ruta del COG y los cuerpos de error son datos.
+  function el(tag, props) {
+    var n = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      if (k === "text") n.textContent = props[k];
+      else if (k === "class") n.className = props[k];
+      else n.setAttribute(k, props[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) {
+      var c = arguments[i];
+      if (c == null) continue;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+    return n;
+  }
+  function chip(tipo, texto) { return el("span", { class: "chip " + tipo, text: texto }); }
+  function nota(tipo, texto) { return el("div", { class: "nota " + tipo, text: texto }); }
+  function llenar(nodo) {
+    nodo.replaceChildren();
+    for (var i = 1; i < arguments.length; i++) if (arguments[i]) nodo.appendChild(arguments[i]);
+  }
+
+  // Preferencias sin secretos. Nunca el token ni el JWT de Supabase.
+  var GUARDAR = ["base", "geocore", "cog", "tenant", "parcela", "rmin", "rmax", "cmap"];
+  function leerPrefs() {
+    try {
+      var p = JSON.parse(localStorage.getItem("piloto-titiler") || "{}");
+      GUARDAR.forEach(function (k) { if (p[k] != null && $(k)) $(k).value = p[k]; });
+    } catch (e) { /* sin storage: se sigue con los valores por defecto */ }
+  }
+  function guardarPrefs() {
+    try {
+      var p = {};
+      GUARDAR.forEach(function (k) { if ($(k)) p[k] = $(k).value; });
+      localStorage.setItem("piloto-titiler", JSON.stringify(p));
+    } catch (e) { /* idem */ }
+  }
+
+  // Si la pagina la sirve el propio tileserver, su origen ES el tileserver.
+  function baseInicial() {
+    if (location.protocol.indexOf("http") === 0 &&
+        (location.pathname === "/piloto" || location.pathname.indexOf("/static/") === 0)) {
+      return location.origin;
+    }
+    return "https://terra-tileserver-production.up.railway.app";
+  }
+  function base() { return ($("base").value || "").trim().replace(/\/+$/, ""); }
+  function geocore() { return ($("geocore").value || "").trim().replace(/\/+$/, ""); }
+  function token() { return ($("token").value || "").trim(); }
+  function cog() { return ($("cog").value || "").trim(); }
+  function rango() { return [parseFloat($("rmin").value), parseFloat($("rmax").value)]; }
+
+  // fetch que nunca levanta: siempre devuelve {status, tipo, cuerpo, error}.
+  // status 0 = el navegador no recibio respuesta (red, URL, o CORS).
+  function pedir(url, opciones) {
+    return fetch(url, opciones).then(function (r) {
+      var tipo = r.headers.get("content-type") || "";
+      var lector = tipo.indexOf("json") >= 0 ? r.json() : (tipo.indexOf("image") >= 0 ? r.blob() : r.text());
+      return lector.then(function (cuerpo) { return { status: r.status, tipo: tipo, cuerpo: cuerpo }; },
+                         function () { return { status: r.status, tipo: tipo, cuerpo: null }; });
+    }, function (e) {
+      return { status: 0, tipo: "", cuerpo: null, error: String(e && e.message || e) };
+    });
+  }
+  function detalle(res) {
+    if (res.status === 0) return "Sin respuesta (" + (res.error || "red") + "). URL mal, servicio caído, o CORS.";
+    var c = res.cuerpo;
+    if (c && typeof c === "object" && !(c instanceof Blob)) {
+      var d = c.detail !== undefined ? c.detail : c;
+      if (d && typeof d === "object") return (d.code ? d.code + ": " : "") + (d.message || JSON.stringify(d));
+      return String(d);
+    }
+    return typeof c === "string" ? c.slice(0, 300) : "";
+  }
+  function q(params) {
+    var u = new URLSearchParams();
+    Object.keys(params).forEach(function (k) { if (params[k] !== undefined && params[k] !== "") u.set(k, params[k]); });
+    return u.toString();
+  }
+
+  // ---------------------------------------------------------------- mapa
+  var mapa = L.map("mapa", { zoomControl: true }).setView([24.8, -107.4], 9);
+  mapa.attributionControl.setPrefix(false);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Imagen © Esri", maxZoom: 20
+  }).addTo(mapa);
+
+  var capa = null;
+  var info = null;
+  var stats = null;
+  var sondeoAutomatico = false;
+
+  // ---------------------------------------------------------------- 1. salud
+  $("btn-salud").addEventListener("click", function () {
+    var nodo = $("res-salud");
+    llenar(nodo, chip("", "consultando…"));
+    pedir(base() + "/health/ready").then(function (res) {
+      if (res.status === 0) return llenar(nodo, chip("bad", "sin respuesta"), nota("bad", detalle(res)));
+      var cuerpo = res.cuerpo || {};
+      var tipo = cuerpo.status === "ok" ? "ok" : (cuerpo.status === "degradado" ? "warn" : "bad");
+      var lista = el("dl", { class: "claims" });
+      (cuerpo.checks || []).forEach(function (c) {
+        lista.appendChild(el("dt", { text: c.name }));
+        lista.appendChild(el("dd", { text: c.status + " — " + c.detail }));
+      });
+      llenar(nodo, chip(tipo, res.status + " · " + (cuerpo.status || "?")), lista);
+    });
+  });
+
+  // ---------------------------------------------------------------- 2. token
+  function decodificar(jwt) {
+    try {
+      var parte = jwt.split(".")[1];
+      var b64 = parte.replace(/-/g, "+").replace(/_/g, "/");
+      while (b64.length % 4) b64 += "=";
+      var txt = decodeURIComponent(Array.prototype.map.call(atob(b64), function (ch) {
+        return "%" + ("00" + ch.charCodeAt(0).toString(16)).slice(-2);
+      }).join(""));
+      return JSON.parse(txt);
+    } catch (e) { return null; }
+  }
+
+  var reloj = null;
+  function mostrarToken() {
+    var nodo = $("res-token");
+    clearInterval(reloj);
+    var t = token();
+    if (!t) return llenar(nodo);
+    var p = decodificar(t);
+    if (!p) return llenar(nodo, chip("bad", "no es un JWT"), nota("bad", "Un token de mapa tiene tres partes separadas por puntos."));
+
+    // Error frecuente: pegar el JWT de Supabase en vez del token de mapa. La
+    // firma no va a cerrar y TiTiler contesta 401 "inválido", que no lo explica.
+    var esSupabase = p.aud === "authenticated" || String(p.iss || "").indexOf("supabase") >= 0;
+    var esMapa = p.iss === "Geocore" && p.aud === "TiTiler" && p.type === "map-access";
+
+    var lista = el("dl", { class: "claims" },
+      el("dt", { text: "iss" }), el("dd", { text: String(p.iss) }),
+      el("dt", { text: "aud" }), el("dd", { text: String(p.aud) }),
+      el("dt", { text: "type" }), el("dd", { text: String(p.type) }),
+      el("dt", { text: "vence" }), el("dd", { id: "vence", text: "—" }));
+
+    var estado = chip("", "…");
+    llenar(nodo, estado, lista,
+      esSupabase ? nota("bad", "Esto es el JWT de Supabase, no el token de mapa. Sirve para pedirle el token a Geocore (el desplegable de arriba), no para TiTiler.") : null,
+      !esSupabase && !esMapa ? nota("warn", "No tiene la forma de un token de mapa (iss=Geocore, aud=TiTiler, type=map-access). TiTiler lo va a rechazar.") : null,
+      nota("", "Decodificar no es verificar: acá sólo se lee lo que dice el token. La firma la valida TiTiler con MAP_TOKEN_SECRET."));
+
+    function tic() {
+      if (!p.exp) { estado.className = "chip warn"; estado.textContent = "sin exp"; return; }
+      var s = Math.round(p.exp - Date.now() / 1000);
+      var v = $("vence");
+      if (s <= 0) {
+        estado.className = "chip bad"; estado.textContent = "vencido";
+        if (v) v.textContent = "hace " + formatoTiempo(-s) + " — cada tile va a dar 401";
+        clearInterval(reloj);
+        return;
+      }
+      estado.className = s < 300 ? "chip warn" : "chip ok";
+      estado.textContent = s < 300 ? "vence pronto" : "válido";
+      if (v) v.textContent = "en " + formatoTiempo(s);
+    }
+    tic();
+    reloj = setInterval(tic, 1000);
+    actualizarTodo();
+  }
+  function formatoTiempo(s) {
+    var m = Math.floor(s / 60), r = s % 60;
+    return (m >= 60 ? Math.floor(m / 60) + " h " + (m % 60) + " min" : m + " min " + (r < 10 ? "0" : "") + r + " s");
+  }
+  $("token").addEventListener("input", mostrarToken);
+
+  $("btn-pedir-token").addEventListener("click", function () {
+    var nodo = $("res-token");
+    var sb = ($("supabase").value || "").trim();
+    if (!geocore() || !sb) return llenar(nodo, nota("warn", "Faltan la URL de Geocore o el access token de Supabase."));
+    guardarPrefs();
+    llenar(nodo, chip("", "pidiendo…"));
+    pedir(geocore() + "/api/maps/token", { headers: { Authorization: "Bearer " + sb } }).then(function (res) {
+      if (res.status === 200 && res.cuerpo && res.cuerpo.token) {
+        $("token").value = res.cuerpo.token;
+        mostrarToken();
+        return;
+      }
+      llenar(nodo, chip("bad", res.status || "sin respuesta"), nota("bad", detalle(res)),
+        res.status === 401 ? nota("warn", "401 de Geocore: el JWT de Supabase venció o no es de este proyecto.") : null);
+    });
+  });
+
+  // ---------------------------------------------------------------- 3. capas e info
+  $("btn-capas").addEventListener("click", function () {
+    var nodo = $("lista-capas");
+    var sb = ($("supabase").value || "").trim();
+    if (!geocore() || !sb) return llenar(nodo, nota("warn", "Completá la URL de Geocore y el token de Supabase en el paso 2."));
+    guardarPrefs();
+    llenar(nodo, chip("", "consultando…"));
+    var headers = { Authorization: "Bearer " + sb };
+    if ($("tenant").value.trim()) headers["X-Tenant-ID"] = $("tenant").value.trim();
+    var consulta = q({ parcelaId: $("parcela").value.trim(), limit: 50 });
+    pedir(geocore() + "/api/layers?" + consulta, { headers: headers }).then(function (res) {
+      if (res.status !== 200 || !Array.isArray(res.cuerpo)) {
+        return llenar(nodo, chip("bad", res.status || "sin respuesta"), nota("bad", detalle(res)));
+      }
+      if (!res.cuerpo.length) return llenar(nodo, nota("warn", "Sin capas. ¿El worker ya registró alguna para este tenant?"));
+      nodo.replaceChildren();
+      res.cuerpo.forEach(function (c) {
+        var fecha = String(c.acquiredTs || "").slice(0, 10);
+        var b = el("button", { class: "capa", type: "button", text: fecha + " · " + c.product + " · " + c.storageKey });
+        b.addEventListener("click", function () {
+          // Mismo armado que LayersController: s3://{bucket}/{storageKey}.
+          $("cog").value = "s3://terra-assets/" + c.storageKey;
+          guardarPrefs();
+          leerInfo();
+        });
+        nodo.appendChild(b);
+      });
+    });
+  });
+
+  function leerInfo() {
+    var nodo = $("res-info");
+    if (!cog()) return llenar(nodo, nota("warn", "Falta la ruta del COG."));
+    if (!token()) return llenar(nodo, nota("warn", "Falta el token del paso 2: /cog/info también lo exige."));
+    guardarPrefs();
+    llenar(nodo, chip("", "leyendo…"));
+    var comun = q({ url: cog(), token: token() });
+    Promise.all([
+      pedir(base() + "/cog/info?" + comun),
+      pedir(base() + "/cog/statistics?" + comun)
+    ]).then(function (r) {
+      var ri = r[0], rs = r[1];
+      if (ri.status !== 200) {
+        info = null;
+        return llenar(nodo, chip("bad", "info · " + (ri.status || "sin respuesta")), nota("bad", detalle(ri)));
+      }
+      info = ri.cuerpo;
+      stats = rs.status === 200 && rs.cuerpo ? (rs.cuerpo.b1 || rs.cuerpo[Object.keys(rs.cuerpo)[0]]) : null;
+      $("btn-p2p98").disabled = !stats;
+
+      var b = info.bounds || [];
+      var lista = el("dl", { class: "claims" },
+        el("dt", { text: "dtype" }), el("dd", { text: String(info.dtype) }),
+        el("dt", { text: "bandas" }), el("dd", { text: String(info.count) }),
+        el("dt", { text: "tamaño" }), el("dd", { text: info.width + " × " + info.height + " px" }),
+        el("dt", { text: "zoom" }), el("dd", { text: info.minzoom + " … " + info.maxzoom + " (nativo)" }),
+        el("dt", { text: "bounds" }), el("dd", { text: b.map(function (x) { return (+x).toFixed(4); }).join(", ") }),
+        stats ? el("dt", { text: "mín / máx" }) : null,
+        stats ? el("dd", { text: (+stats.min).toFixed(3) + " / " + (+stats.max).toFixed(3) }) : null,
+        stats ? el("dt", { text: "p2 / p98" }) : null,
+        stats ? el("dd", { text: (+stats.percentile_2).toFixed(3) + " / " + (+stats.percentile_98).toFixed(3) }) : null,
+        stats && stats.valid_percent != null ? el("dt", { text: "con dato" }) : null,
+        stats && stats.valid_percent != null ? el("dd", { text: (+stats.valid_percent).toFixed(1) + " % de los píxeles" }) : null);
+
+      var esFloat = String(info.dtype).indexOf("float") === 0;
+      llenar(nodo, chip("ok", "200 · metadatos"), lista,
+        esFloat ? nota("", "Es " + info.dtype + ": valores crudos, no colores. Por eso el paso 4 necesita rescale.") : null,
+        rs.status !== 200 ? nota("warn", "/cog/statistics respondió " + (rs.status || "sin respuesta") + ": sin sugerencia de contraste.") : null);
+      actualizarTodo();
+    });
+  }
+  $("btn-info").addEventListener("click", leerInfo);
+
+  // ---------------------------------------------------------------- 4. pintar
+  Array.prototype.forEach.call(document.querySelectorAll("[data-rango]"), function (b) {
+    b.addEventListener("click", function () {
+      var r = b.getAttribute("data-rango").split(",");
+      $("rmin").value = r[0]; $("rmax").value = r[1];
+      actualizarTodo(true);
+    });
+  });
+  $("btn-p2p98").addEventListener("click", function () {
+    if (!stats) return;
+    $("rmin").value = (+stats.percentile_2).toFixed(3);
+    $("rmax").value = (+stats.percentile_98).toFixed(3);
+    actualizarTodo(true);
+  });
+  ["rmin", "rmax", "cmap"].forEach(function (id) {
+    $(id).addEventListener("change", function () { actualizarTodo(true); });
+  });
+  $("opacidad").addEventListener("input", function () { if (capa) capa.setOpacity(+$("opacidad").value); });
+
+  // La plantilla que devuelve Geocore, tal cual (LayersController.GetLayer).
+  function plantillaGeocore() {
+    return base() + "/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?url=" + cog();
+  }
+  // Lo que el mapa tiene que pedir: la plantilla mas tres parametros del front.
+  function plantillaFinal(conToken) {
+    var r = rango();
+    return base() + "/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?" + q({
+      url: cog(),
+      rescale: r[0] + "," + r[1],
+      colormap_name: $("cmap").value,
+      token: conToken === false ? undefined : token()
+    });
+  }
+
+  function pintar() {
+    var nodo = $("res-pintar");
+    if (!cog() || !token()) return llenar(nodo, nota("warn", "Faltan el token (paso 2) o la ruta del COG (paso 3)."));
+    var r = rango();
+    if (!(r[0] < r[1])) return llenar(nodo, nota("warn", "El mínimo del rescale tiene que ser menor que el máximo."));
+    guardarPrefs();
+
+    if (capa) mapa.removeLayer(capa);
+    sondeoAutomatico = false;
+    var opciones = { opacity: +$("opacidad").value, maxZoom: 20, noWrap: true };
+    if (info && info.bounds) {
+      var b = info.bounds;
+      opciones.bounds = L.latLngBounds([b[1], b[0]], [b[3], b[2]]);
+      // El zoom nativo del raster, no el 18 fijo que manda Geocore.
+      opciones.maxNativeZoom = info.maxzoom;
+    }
+    capa = L.tileLayer(plantillaFinal(), opciones).addTo(mapa);
+
+    var errores = 0, cargados = 0;
+    capa.on("tileload", function () { cargados++; resumen(); });
+    capa.on("tileerror", function (e) {
+      errores++; resumen();
+      // La primera vez, se pide ese mismo tile con fetch para saber POR QUE.
+      if (!sondeoAutomatico) {
+        sondeoAutomatico = true;
+        probarTile(e.coords.z, e.coords.x, e.coords.y);
+        seleccionarTab("t-diag");
+      }
+    });
+    function resumen() {
+      llenar(nodo,
+        chip(errores ? "bad" : "ok", cargados + " tiles cargados · " + errores + " con error"),
+        errores ? nota("bad", "Hay tiles que fallan: la pestaña Diagnóstico muestra el código HTTP.") : null);
+    }
+    llenar(nodo, chip("", "pidiendo tiles…"));
+    if (opciones.bounds) mapa.fitBounds(opciones.bounds, { padding: [30, 30] });
+    actualizarLeyenda();
+    actualizarTodo();
+  }
+  $("btn-pintar").addEventListener("click", pintar);
+
+  // ---------------------------------------------------------------- leyenda
+  // Sale del mismo colormap que pide el tile, via /cog/colorMaps/{nombre}. Si
+  // el endpoint no contesta, se cae a un degradado aproximado.
+  var APROX = {
+    rdylgn: "#a50026,#f46d43,#fee08b,#d9ef8b,#66bd63,#006837",
+    ylgn: "#ffffe5,#d9f0a3,#78c679,#238443,#004529",
+    greens: "#f7fcf5,#c7e9c0,#74c476,#238b45,#00441b",
+    viridis: "#440154,#3b528b,#21918c,#5ec962,#fde725",
+    spectral: "#9e0142,#f46d43,#fee08b,#abdda4,#3288bd,#5e4fa2",
+    rdbu: "#67001f,#d6604d,#f7f7f7,#4393c3,#053061"
+  };
+  function actualizarLeyenda() {
+    var nombre = $("cmap").value, r = rango();
+    $("leyenda").hidden = false;
+    $("leyenda-titulo").textContent = "NDVI · " + nombre;
+    $("leyenda-min").textContent = r[0];
+    $("leyenda-max").textContent = r[1];
+    $("leyenda-barra").style.background = "linear-gradient(90deg," + APROX[nombre] + ")";
+    if (!token()) return;
+    pedir(base() + "/cog/colorMaps/" + encodeURIComponent(nombre) + "?" + q({ token: token() })).then(function (res) {
+      var cm = res.cuerpo;
+      if (res.status !== 200 || !cm || typeof cm !== "object") return;
+      var paradas = [];
+      for (var i = 0; i <= 255; i += 17) {
+        var c = cm[i] || cm[String(i)];
+        if (c) paradas.push("rgb(" + c[0] + "," + c[1] + "," + c[2] + ") " + ((i / 255) * 100).toFixed(1) + "%");
+      }
+      if (paradas.length > 2) $("leyenda-barra").style.background = "linear-gradient(90deg," + paradas.join(",") + ")";
+    });
+  }
+
+  // ---------------------------------------------------------------- click → valor
+  function categoriaNdvi(v) {
+    if (v < 0) return "agua o suelo desnudo";
+    if (v < 0.2) return "suelo o vegetación muy escasa";
+    if (v < 0.4) return "vegetación escasa";
+    if (v < 0.6) return "vegetación moderada";
+    return "vegetación densa";
+  }
+  mapa.on("click", function (e) {
+    var cuerpo = $("lectura-cuerpo");
+    if (!capa || !cog() || !token()) return;
+    var lon = e.latlng.lng.toFixed(6), lat = e.latlng.lat.toFixed(6);
+    cuerpo.textContent = "consultando…";
+    pedir(base() + "/cog/point/" + lon + "," + lat + "?" + q({ url: cog(), token: token() })).then(function (res) {
+      var v = res.cuerpo && res.cuerpo.values ? res.cuerpo.values[0] : null;
+      if (res.status !== 200) {
+        llenar(cuerpo, document.createTextNode(res.status === 404 ? "Fuera del raster." : "Error " + (res.status || "sin respuesta") + ": " + detalle(res)));
+        return;
+      }
+      if (v == null || Number.isNaN(+v)) { cuerpo.textContent = "Sin dato en ese píxel (máscara)."; return; }
+      llenar(cuerpo,
+        el("strong", { text: (+v).toFixed(3) }),
+        el("div", { text: categoriaNdvi(+v) }),
+        el("div", { class: "eyebrow", text: lat + ", " + lon }));
+    });
+  });
+
+  // ---------------------------------------------------------------- diagnostico
+  function tileDelCentro() {
+    var b = info && info.bounds ? info.bounds : null;
+    var c = mapa.getCenter();
+    var lon = b ? (b[0] + b[2]) / 2 : c.lng, lat = b ? (b[1] + b[3]) / 2 : c.lat;
+    var z = info ? Math.max(info.minzoom || 0, Math.min((info.maxzoom || 14) - 1, 18)) : mapa.getZoom();
+    var n = Math.pow(2, z), rad = lat * Math.PI / 180;
+    return { z: z,
+             x: Math.floor((lon + 180) / 360 * n),
+             y: Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n) };
+  }
+  function urlDeTile(z, x, y) {
+    return plantillaFinal().replace("{z}", z).replace("{x}", x).replace("{y}", y);
+  }
+  function probarTile(z, x, y) {
+    var nodo = $("res-diag");
+    if (z == null) { var t = tileDelCentro(); z = t.z; x = t.x; y = t.y; }
+    llenar(nodo, chip("", "pidiendo " + z + "/" + x + "/" + y + "…"));
+    pedir(urlDeTile(z, x, y)).then(function (res) {
+      var ok = res.status === 200 && res.cuerpo instanceof Blob;
+      var partes = [chip(ok ? "ok" : "bad", (res.status || "sin respuesta") + " · tile " + z + "/" + x + "/" + y)];
+      if (ok) {
+        var img = el("img", { class: "miniatura", alt: "Tile " + z + "/" + x + "/" + y });
+        img.src = URL.createObjectURL(res.cuerpo);
+        partes.push(img);
+        partes.push(nota(res.cuerpo.size < 200 ? "warn" : "ok", res.cuerpo.size < 200
+          ? "PNG de " + res.cuerpo.size + " bytes: casi seguro el PNG transparente de fuera del raster. No es un error."
+          : "PNG de " + res.cuerpo.size + " bytes: el tile se sirve bien."));
+      } else {
+        partes.push(nota("bad", detalle(res)));
+        partes.push(nota("", explicar(res)));
+      }
+      llenar.apply(null, [nodo].concat(partes));
+    });
+  }
+  function explicar(res) {
+    var d = (detalle(res) || "").toLowerCase();
+    switch (res.status) {
+      case 0: return "El navegador no recibió respuesta. Probá /health/ready en el paso 1.";
+      case 400: return "La ruta no está permitida: tiene que empezar con s3://terra-assets/ y no tener '..'.";
+      case 401:
+        if (d.indexOf("expir") >= 0) return "El token venció. Pedí otro a /api/maps/token y volvé a pintar.";
+        if (d.indexOf("falta") >= 0) return "La URL no lleva token.";
+        return "El token no valida. ¿Es el de /api/maps/token y no el de Supabase? Si lo es, MAP_TOKEN_SECRET del tileserver no coincide con GeoData__MapTokenSecret de Geocore.";
+      case 403: return "El token está bien firmado pero no es de tipo map-access.";
+      case 404: return "Normalmente: no existe un archivo en esa ruta. Revisá la storageKey.";
+      case 503: return "Al tileserver le falta MAP_TOKEN_SECRET.";
+      default: return "Mirá el log del tileserver: el reporte de arranque dice si MinIO conecta.";
+    }
+  }
+  $("btn-probar").addEventListener("click", function () { probarTile(); });
+
+  $("btn-copiar-tile").addEventListener("click", function () {
+    var t = tileDelCentro();
+    copiar(urlDeTile(t.z, t.x, t.y), $("btn-copiar-tile"));
+  });
+  $("btn-copiar-codigo").addEventListener("click", function () { copiar($("codigo").textContent, $("btn-copiar-codigo")); });
+  function copiar(texto, boton) {
+    var antes = boton.textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(texto) : Promise.reject())
+      .then(function () { boton.textContent = "Copiado"; }, function () { boton.textContent = "No se pudo copiar"; })
+      .then(function () { setTimeout(function () { boton.textContent = antes; }, 1600); });
+  }
+
+  // ---------------------------------------------------------------- anatomia y codigo
+  function segmentar(nodo, conToken) {
+    nodo.replaceChildren();
+    if (!cog()) { nodo.textContent = "Elegí un COG en el paso 3."; return; }
+    var r = rango();
+    nodo.appendChild(el("span", { class: "seg-base", text: base() }));
+    nodo.appendChild(el("span", { class: "seg-geocore", text: "/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x" }));
+    nodo.appendChild(el("span", { class: "seg-geocore", text: "?url=" + encodeURIComponent(cog()) }));
+    if (!conToken) return;
+    nodo.appendChild(el("span", { class: "seg-front", text: "&rescale=" + encodeURIComponent(r[0] + "," + r[1]) }));
+    nodo.appendChild(el("span", { class: "seg-front", text: "&colormap_name=" + $("cmap").value }));
+    // El token se muestra recortado: esta pantalla se comparte en capturas.
+    var t = token();
+    nodo.appendChild(el("span", { class: "seg-token", text: "&token=" + (t ? t.slice(0, 12) + "…(" + t.length + " caracteres)" : "<falta>") }));
+  }
+
+  function generarCodigo() {
+    var r = rango(), cm = $("cmap").value;
+    return [
+      "// src/components/CapaIndice.tsx",
+      "import { TileLayer } from 'react-leaflet'",
+      "import type { LatLngBoundsExpression } from 'leaflet'",
+      "",
+      "// `plantilla` es layer.tiles[0] de GET /api/layers/{id}:",
+      "//   <tileserver>/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?url=s3://terra-assets/...",
+      "// Geocore NO agrega rescale, colormap_name ni token: van aca.",
+      "export function completarPlantilla(plantilla: string, token: string) {",
+      "  const extra = new URLSearchParams({",
+      "    rescale: '" + r[0] + "," + r[1] + "',   // el COG es " + ((info && info.dtype) || "float32") + ": NDVI crudo, no colores",
+      "    colormap_name: '" + cm + "',",
+      "    token,                     // GET /api/maps/token — dura 1 hora",
+      "  })",
+      "  return `${plantilla}&${extra}`",
+      "}",
+      "",
+      "type Props = {",
+      "  plantilla: string",
+      "  token: string",
+      "  bounds: LatLngBoundsExpression       // layer.bounds de Geocore, como [[s, w], [n, e]]",
+      "  maxNativeZoom?: number               // info.maxzoom de /cog/info; no el 18 de Geocore",
+      "}",
+      "",
+      "export function CapaIndice({ plantilla, token, bounds, maxNativeZoom = " + ((info && info.maxzoom) || 14) + " }: Props) {",
+      "  // Cuando el token se renueva, cambia `url` y react-leaflet llama a setUrl.",
+      "  return (",
+      "    <TileLayer",
+      "      url={completarPlantilla(plantilla, token)}",
+      "      bounds={bounds}",
+      "      maxNativeZoom={maxNativeZoom}",
+      "      maxZoom={20}",
+      "      opacity={" + (+$("opacidad").value) + "}",
+      "      noWrap",
+      "    />",
+      "  )",
+      "}",
+      "",
+      "// Adentro del MapContainer de GeometryView.tsx, despues de la capa base:",
+      "//   <TileLayer url=\"https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png\" />",
+      "//   <CapaIndice plantilla={layer.tiles[0]} token={mapToken} bounds={...} />",
+      "//",
+      "// Renovar el token antes de que venza (vence a la hora):",
+      "//   const { token } = await api.get('/api/maps/token')   // cada ~50 min",
+      "//   setMapToken(token)",
+      ""
+    ].join("\n");
+  }
+
+  function actualizarTodo(repintar) {
+    segmentar($("url-geocore"), false);
+    segmentar($("url-final"), true);
+    $("codigo").textContent = generarCodigo();
+    var listo = !!(cog() && token());
+    $("btn-probar").disabled = !listo;
+    $("btn-copiar-tile").disabled = !listo;
+    if (repintar && capa) { capa.setUrl(plantillaFinal()); actualizarLeyenda(); guardarPrefs(); }
+  }
+  ["base", "cog"].forEach(function (id) { $(id).addEventListener("input", function () { actualizarTodo(); }); });
+
+  // ---------------------------------------------------------------- pestañas
+  function seleccionarTab(id) {
+    Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (t) {
+      var activa = t.id === id;
+      t.setAttribute("aria-selected", activa ? "true" : "false");
+      $(t.getAttribute("aria-controls")).hidden = !activa;
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".tab"), function (t) {
+    t.addEventListener("click", function () { seleccionarTab(t.id); });
+  });
+
+  // ---------------------------------------------------------------- arranque
+  $("base").value = baseInicial();
+  leerPrefs();
+  if (!$("cog").value) $("cog").value = "s3://terra-assets/pruebas/test_cog.tif";
+  actualizarTodo();
+})();
+</script>
+</body>
+</html>
