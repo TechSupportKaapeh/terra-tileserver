@@ -516,9 +516,9 @@
               <tr><td><code>401</code> inválido</td><td>La firma no cierra: el <code>MAP_TOKEN_SECRET</code> del tileserver no es igual a <code>GeoData__MapTokenSecret</code> de Geocore, o pegaste el JWT de Supabase.</td><td>Usar el token de <code>/api/maps/token</code>; si ya es ése, comparar los dos secretos.</td></tr>
               <tr><td><code>403</code></td><td>Token firmado pero no es de tipo mapa.</td><td>Usar el de <code>/api/maps/token</code>.</td></tr>
               <tr><td><code>400</code></td><td>La <code>url</code> no está bajo <code>s3://terra-assets/</code> o tiene <code>..</code>. Es la defensa contra SSRF.</td><td>Revisar la ruta del COG.</td></tr>
-              <tr><td><code>404</code></td><td>Normalmente, el archivo no existe en esa ruta.</td><td>Revisar la <code>storageKey</code>.</td></tr>
+              <tr><td><code>404</code></td><td>Sólo en <code>/cog/point</code>: el punto cae fuera del raster.</td><td>Nada: hacé click adentro.</td></tr>
               <tr><td><code>503</code></td><td>Al tileserver le falta <code>MAP_TOKEN_SECRET</code>.</td><td>Configurarlo en Railway.</td></tr>
-              <tr><td><code>500</code></td><td>Error del lado del servidor, casi siempre llegando a MinIO.</td><td>Mirar el log del tileserver: el reporte de arranque dice si MinIO conecta.</td></tr>
+              <tr><td><code>500</code></td><td>Error del lado del servidor, sin motivo en la respuesta: a propósito, porque el mensaje crudo de GDAL puede traer direcciones internas. En TiTiler 0.18, <strong>un archivo inexistente es 500, no 404</strong>.</td><td>Revisar la <code>storageKey</code>. Si está bien, mirar el log del tileserver: el reporte de arranque dice si MinIO conecta.</td></tr>
               <tr><td>sin código</td><td>El navegador no recibió respuesta: URL mal, servicio caído, o CORS.</td><td>Probar <code>/health/ready</code> en el paso 1.</td></tr>
             </tbody>
           </table>
@@ -532,7 +532,8 @@
           <li><strong>El token dura una hora.</strong> Cuando vence, cada tile nuevo da 401 y el mapa se llena de huecos sin ningún error visible. Hay que pedir otro antes de que venza y cambiar la <code>url</code> del <code>TileLayer</code>; react-leaflet llama a <code>setUrl</code> cuando la prop cambia.</li>
           <li><strong>No pongas <code>nodata=0</code>.</strong> El COG trae máscara interna (el worker lo convierte con <code>add_mask=True</code>), así que TiTiler ya sabe qué píxeles están vacíos. Y NDVI = 0 es un valor real: agua y suelo desnudo andan por ahí. El <code>/viewer</code> viejo lo pasa y los borra.</li>
           <li><strong>El zoom nativo sale de <code>/cog/info</code>.</strong> Geocore devuelve <code>maxzoom: 18</code> fijo. Si lo usás como <code>maxNativeZoom</code>, pedís tiles más finos que el raster (10 m por píxel) y TiTiler los agranda en el servidor. Usá el <code>maxzoom</code> de <code>/cog/info</code> como <code>maxNativeZoom</code> y dejá <code>maxZoom</code> alto.</li>
-          <li><strong>La leyenda tiene que salir de los mismos parámetros.</strong> Si el mapa usa <code>rescale=0,0.9</code> y la leyenda dice -1 … 1, el usuario lee mal los colores. El piloto arma la leyenda desde <code>/cog/colorMaps/{nombre}</code> y el mismo rango.</li>
+          <li><strong>La leyenda tiene que salir de los mismos parámetros.</strong> Si el mapa usa <code>rescale=0,0.9</code> y la leyenda dice -1 … 1, el usuario lee mal los colores. El piloto arma la leyenda con el mismo rango y las mismas paradas de color que usa TiTiler (ColorBrewer, vía matplotlib). No hay endpoint para pedírsela: <code>/cog/colorMaps</code> no está montado en este tileserver.</li>
+          <li><strong>Cuadrados blancos al lado del raster: es caché.</strong> Hasta el 11/09 el tileserver contestaba los tiles fuera del raster con un PNG que decía ser transparente y era blanco opaco. Ya está arreglado, pero esos tiles llevan <code>Cache-Control</code> de un año y la URL incluye el token: el navegador reusa el blanco hasta que pidas un token nuevo.</li>
           <li><strong>Codificá la ruta del COG.</strong> Geocore pone <code>url=s3://…</code> sin codificar. Hoy anda porque las keys del worker son uuid y fechas; si alguna vez aparece un espacio, un <code>&amp;</code> o un <code>#</code>, se rompe. <code>URLSearchParams</code> lo resuelve.</li>
           <li><strong>HTTPS no requiere ngrok.</strong> Railway ya sirve el tileserver en <code>https://…up.railway.app</code>. ngrok sirve para exponer algo que corre en tu máquina; nada de esto corre en tu máquina.</li>
           <li><strong>Los colores del heatmap del worker no son esta paleta.</strong> El PNG de <code>generate-heatmap-on-demand</code> usa una paleta propia de 17 colores; <code>rdylgn</code> se le parece pero no es igual. Si la UI muestra los dos, conviene avisarlo o unificarlo.</li>
@@ -805,7 +806,26 @@
         stats && stats.valid_percent != null ? el("dd", { text: (+stats.valid_percent).toFixed(1) + " % de los píxeles" }) : null);
 
       var esFloat = String(info.dtype).indexOf("float") === 0;
+      // Un raster constante —todos los píxeles iguales— se pinta como un
+      // cuadrado de un solo color con cualquier paleta: no hay imagen que ver.
+      // Es exactamente pruebas/test_cog.tif, el bloque sintético de 10×10 unos
+      // que sube check_titiler_minio.py. Sin este aviso, el cuadrado plano se
+      // lee como "TiTiler anda mal".
+      var constante = !!stats && +stats.min === +stats.max;
+      // p2 == p98 deja un rango vacío: rescale=1,1 y TiTiler divide por cero.
+      $("btn-p2p98").disabled = !stats || !(+stats.percentile_2 < +stats.percentile_98);
       llenar(nodo, chip("ok", "200 · metadatos"), lista,
+        constante ? nota("warn", "Todos los píxeles valen " + stats.min + ": es un raster constante y se va a ver como un cuadrado de un solo color, con cualquier paleta. " +
+          "Si es pruebas/test_cog.tif, es un bloque sintético de check_titiler_minio.py, no un NDVI: para ver un índice de verdad, usá una capa del worker.") : null,
+        // Casi todo enmascarado: pasa con los heatmaps del worker, que se
+        // exportan del tamaño de un tile de zoom 14 aunque la parcela ocupe una
+        // fracción. Se ven como unos pocos píxeles, no como una mancha.
+        !constante && stats && stats.valid_percent != null && +stats.valid_percent < 1
+          ? nota("warn", "Sólo el " + (+stats.valid_percent).toFixed(2) + " % de los píxeles tiene dato" +
+              (stats.valid_pixels != null ? " (" + stats.valid_pixels + ")" : "") +
+              ": el resto está enmascarado y se verá transparente. En el mapa van a ser unos pocos píxeles, no una mancha.")
+          : null,
+        !esFloat && !constante ? nota("warn", "Es " + info.dtype + ", no float: no parece un índice crudo como el NDVI, así que rescale -1 … 1 probablemente no le corresponda.") : null,
         esFloat ? nota("", "Es " + info.dtype + ": valores crudos, no colores. Por eso el paso 4 necesita rescale.") : null,
         rs.status !== 200 ? nota("warn", "/cog/statistics respondió " + (rs.status || "sin respuesta") + ": sin sugerencia de contraste.") : null);
       actualizarTodo();
@@ -822,7 +842,9 @@
     });
   });
   $("btn-p2p98").addEventListener("click", function () {
-    if (!stats) return;
+    // El botón ya se deshabilita con p2 == p98, pero se chequea igual: con un
+    // raster constante el rango quedaría vacío.
+    if (!stats || !(+stats.percentile_2 < +stats.percentile_98)) return;
     $("rmin").value = (+stats.percentile_2).toFixed(3);
     $("rmax").value = (+stats.percentile_98).toFixed(3);
     actualizarTodo(true);
@@ -889,15 +911,21 @@
   $("btn-pintar").addEventListener("click", pintar);
 
   // ---------------------------------------------------------------- leyenda
-  // Sale del mismo colormap que pide el tile, via /cog/colorMaps/{nombre}. Si
-  // el endpoint no contesta, se cae a un degradado aproximado.
-  var APROX = {
-    rdylgn: "#a50026,#f46d43,#fee08b,#d9ef8b,#66bd63,#006837",
-    ylgn: "#ffffe5,#d9f0a3,#78c679,#238443,#004529",
-    greens: "#f7fcf5,#c7e9c0,#74c476,#238b45,#00441b",
-    viridis: "#440154,#3b528b,#21918c,#5ec962,#fde725",
-    spectral: "#9e0142,#f46d43,#fee08b,#abdda4,#3288bd,#5e4fa2",
-    rdbu: "#67001f,#d6604d,#f7f7f7,#4393c3,#053061"
+  // Las paradas de ColorBrewer que usa matplotlib, de donde rio-tiler saca sus
+  // colormaps: interpoladas en CSS, dan el mismo degradado que el tile. El
+  // centro de rdylgn, #ffffbf, es el crema casi blanco que devuelve TiTiler para
+  // NDVI cercano a 0.
+  //
+  // Antes se pedía /cog/colorMaps/{nombre}, pero esa ruta es de ColorMapFactory
+  // y el tileserver sólo monta TilerFactory y MosaicTilerFactory: era un 404
+  // en cada pintada.
+  var PALETAS = {
+    rdylgn: "#a50026,#d73027,#f46d43,#fdae61,#fee08b,#ffffbf,#d9ef8b,#a6d96a,#66bd63,#1a9850,#006837",
+    ylgn: "#ffffe5,#f7fcb9,#d9f0a3,#addd8e,#78c679,#41ab5d,#238443,#006837,#004529",
+    greens: "#f7fcf5,#e5f5e0,#c7e9c0,#a1d99b,#74c476,#41ab5d,#238b45,#006d2c,#00441b",
+    viridis: "#440154,#482878,#3e4989,#31688e,#26828e,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725",
+    spectral: "#9e0142,#d53e4f,#f46d43,#fdae61,#fee08b,#ffffbf,#e6f598,#abdda4,#66c2a5,#3288bd,#5e4fa2",
+    rdbu: "#67001f,#b2182b,#d6604d,#f4a582,#fddbc7,#f7f7f7,#d1e5f0,#92c5de,#4393c3,#2166ac,#053061"
   };
   function actualizarLeyenda() {
     var nombre = $("cmap").value, r = rango();
@@ -905,18 +933,7 @@
     $("leyenda-titulo").textContent = "NDVI · " + nombre;
     $("leyenda-min").textContent = r[0];
     $("leyenda-max").textContent = r[1];
-    $("leyenda-barra").style.background = "linear-gradient(90deg," + APROX[nombre] + ")";
-    if (!token()) return;
-    pedir(base() + "/cog/colorMaps/" + encodeURIComponent(nombre) + "?" + q({ token: token() })).then(function (res) {
-      var cm = res.cuerpo;
-      if (res.status !== 200 || !cm || typeof cm !== "object") return;
-      var paradas = [];
-      for (var i = 0; i <= 255; i += 17) {
-        var c = cm[i] || cm[String(i)];
-        if (c) paradas.push("rgb(" + c[0] + "," + c[1] + "," + c[2] + ") " + ((i / 255) * 100).toFixed(1) + "%");
-      }
-      if (paradas.length > 2) $("leyenda-barra").style.background = "linear-gradient(90deg," + paradas.join(",") + ")";
-    });
+    $("leyenda-barra").style.background = "linear-gradient(90deg," + (PALETAS[nombre] || PALETAS.rdylgn) + ")";
   }
 
   // ---------------------------------------------------------------- click → valor
@@ -931,11 +948,20 @@
     var cuerpo = $("lectura-cuerpo");
     if (!capa || !cog() || !token()) return;
     var lon = e.latlng.lng.toFixed(6), lat = e.latlng.lat.toFixed(6);
+    // Fuera del raster no se pregunta. TiTiler 0.18 contesta eso con un 500
+    // ("Point is outside dataset bounds"), no con 404, y un 500 en la consola
+    // se lee como que algo se rompió cuando sólo se hizo click afuera.
+    var b = info && info.bounds;
+    if (b && (e.latlng.lng < b[0] || e.latlng.lng > b[2] || e.latlng.lat < b[1] || e.latlng.lat > b[3])) {
+      cuerpo.textContent = "Fuera del raster: ese punto no tiene dato.";
+      return;
+    }
     cuerpo.textContent = "consultando…";
     pedir(base() + "/cog/point/" + lon + "," + lat + "?" + q({ url: cog(), token: token() })).then(function (res) {
       var v = res.cuerpo && res.cuerpo.values ? res.cuerpo.values[0] : null;
       if (res.status !== 200) {
-        llenar(cuerpo, document.createTextNode(res.status === 404 ? "Fuera del raster." : "Error " + (res.status || "sin respuesta") + ": " + detalle(res)));
+        var fuera = /outside/i.test(detalle(res));
+        llenar(cuerpo, document.createTextNode(fuera ? "Fuera del raster." : "Error " + (res.status || "sin respuesta") + ": " + detalle(res)));
         return;
       }
       if (v == null || Number.isNaN(+v)) { cuerpo.textContent = "Sin dato en ese píxel (máscara)."; return; }
@@ -991,8 +1017,10 @@
         if (d.indexOf("falta") >= 0) return "La URL no lleva token.";
         return "El token no valida. ¿Es el de /api/maps/token y no el de Supabase? Si lo es, MAP_TOKEN_SECRET del tileserver no coincide con GeoData__MapTokenSecret de Geocore.";
       case 403: return "El token está bien firmado pero no es de tipo map-access.";
-      case 404: return "Normalmente: no existe un archivo en esa ruta. Revisá la storageKey.";
+      case 404: return "404 en /cog/point es un punto fuera del raster. En un tile no debería aparecer: fuera del raster el tileserver devuelve un PNG transparente con 200.";
       case 503: return "Al tileserver le falta MAP_TOKEN_SECRET.";
+      case 500: return "Error del lado del servidor, y a propósito no dice cuál: el mensaje crudo de GDAL puede traer direcciones internas. " +
+        "Lo más común es que el archivo no exista en esa ruta (en TiTiler 0.18 eso es 500, no 404: revisá la storageKey) o que el tileserver no llegue a MinIO (lo dice el reporte de arranque).";
       default: return "Mirá el log del tileserver: el reporte de arranque dice si MinIO conecta.";
     }
   }
@@ -1084,7 +1112,17 @@
     var listo = !!(cog() && token());
     $("btn-probar").disabled = !listo;
     $("btn-copiar-tile").disabled = !listo;
-    if (repintar && capa) { capa.setUrl(plantillaFinal()); actualizarLeyenda(); guardarPrefs(); }
+    if (repintar && capa) {
+      // El mismo control que en pintar(). Antes los botones de rango aplicaban
+      // el valor directo, y con un raster constante "Contraste p2 … p98" armaba
+      // rescale=1,1: un rango vacío que TiTiler resuelve dividiendo por cero.
+      var r = rango();
+      if (!(r[0] < r[1])) {
+        llenar($("res-pintar"), nota("warn", "El mínimo del rescale tiene que ser menor que el máximo. No se repintó."));
+        return;
+      }
+      capa.setUrl(plantillaFinal()); actualizarLeyenda(); guardarPrefs();
+    }
   }
   ["base", "cog"].forEach(function (id) { $(id).addEventListener("input", function () { actualizarTodo(); }); });
 

@@ -18,7 +18,6 @@ Controles de acceso y su categoría OWASP:
 from __future__ import annotations
 
 import os
-from base64 import b64decode
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -47,23 +46,20 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from rio_tiler.errors import TileOutsideBounds
+from rio_tiler.errors import PointOutsideBounds, TileOutsideBounds
 from titiler.core.factory import TilerFactory
 from titiler.mosaic.factory import MosaicTilerFactory
 
 from terra_tiles.arranque import registrar_arranque
 from terra_tiles.caching import CacheControlMiddleware
 from terra_tiles.health import informe
+from terra_tiles.png import PNG_TRANSPARENTE
 from terra_tiles.security import crear_validador_de_ruta, crear_validador_de_token
 
 # Rutas absolutas respecto de este archivo: con rutas relativas, `StaticFiles`
 # y `FileResponse` dependen del directorio desde el que se lanzó uvicorn.
 _AQUI = Path(__file__).resolve().parent
 _PUBLIC = _AQUI / "public"
-
-_TRANSPARENT_PNG = b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7l3l8AAAAASUVORK5CYII="
-)
 
 app = FastAPI(title="Tileserver Terra (TiTiler + MinIO)")
 
@@ -133,8 +129,31 @@ async def tile_outside_bounds_handler(request: Request, exc: TileOutsideBounds) 
 
     Los clientes de mapa dibujan el ícono de "tile roto" ante un error HTTP, y
     en todo el borde del raster eso es ruido visual constante.
+
+    **Transparente de verdad desde el 2026-09-11.** El literal base64 que había
+    acá era blanco opaco, y pintaba cuadrados blancos al lado de los rasters
+    alineados a la grilla de tiles. Ver `terra_tiles/png.py`.
     """
-    return Response(status_code=200, content=_TRANSPARENT_PNG, media_type="image/png")
+    return Response(status_code=200, content=PNG_TRANSPARENTE, media_type="image/png")
+
+
+@app.exception_handler(PointOutsideBounds)
+async def point_outside_bounds_handler(request: Request, exc: PointOutsideBounds) -> JSONResponse:
+    """Un click fuera del raster es un 404, no un error del servidor.
+
+    TiTiler 0.18 no lo mapea y salía como un 500 pelado, que en la consola del
+    front se lee como que algo se rompió.
+
+    Se atiende **sólo este caso, con mensaje fijo**, en vez de registrar
+    `titiler.core.errors.add_exception_handlers` entero. Ese registra también un
+    manejador para cualquier `Exception` que devuelve `str(exc)` en la
+    respuesta, y los errores de GDAL traen el endpoint de S3 adentro —
+    verificado: "CURL error: Failed to connect to <host> port <puerto>". Con el
+    MinIO privado de Railway eso publicaría `bucket.railway.internal:9000` en
+    una respuesta HTTP, que es justo lo que `/health/ready` se cuida de no
+    mostrar.
+    """
+    return JSONResponse(status_code=404, content={"detail": "El punto está fuera del raster."})
 
 
 # Los dos routers comparten los mismos controles: el token decide QUIÉN pide, y
