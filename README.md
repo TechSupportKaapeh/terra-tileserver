@@ -29,12 +29,13 @@ Por eso `storage_key` guarda la **key pelada**, sin el prefijo `s3://`.
 |---|---|---|
 | `MAP_TOKEN_SECRET` | **sí** | Valida el JWT que firma Geocore. Sin ella, `/cog/*` devuelve **503**. |
 | `MINIO_BUCKET` | **sí** | Único bucket del que se sirven COG. Además **acota qué rutas acepta `?url=`**: es la defensa contra SSRF. |
-| `MINIO_ENDPOINT` | sí | Host:puerto del storage. En Railway, `minio.railway.internal:9000`. |
+| `MINIO_ENDPOINT` | sí | Host:puerto del storage. En Railway, el dominio privado **con** puerto: `<servicio>.railway.internal:9000`. |
 | `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | sí | Credenciales de **solo lectura**. |
-| `MINIO_SECURE` | no | `True` si el endpoint es HTTPS. Con red privada, `False`. |
+| `MINIO_SECURE` | no | Default `false` **fijo** (a diferencia del worker, acá no se deduce del host). Con el dominio privado, dejarla sin poner o en `false`: la red privada no hace TLS y `true` da `WRONG_VERSION_NUMBER`. Sólo el dominio público va en `true`. |
 | `AWS_REGION` | no | Default `us-east-1`. MinIO no la usa, GDAL la exige. |
-| `CORS_ALLOW_ORIGINS` | no | Default `*`. En producción, el dominio del front. |
+| `CORS_ALLOW_ORIGINS` | no | Default `*`, aceptable mientras no haya cookies (ver `docs/SESSION_2026-09-11…` §7). **Vacía no es ausente**: son cero orígenes. |
 | `TILE_CACHE_SECONDS` | no | Default un año. Los COG son inmutables. Bajalo para invalidar rápido en pruebas. |
+| `LOG_LEVEL` | no | Default `INFO`, que es el que muestra el reporte de arranque. Un valor inválido cae a `INFO`. |
 | `PORT` | no | Lo inyecta Railway. Default `8001`. |
 
 ### Los dos valores que tienen que coincidir con Geocore
@@ -83,7 +84,8 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-47 tests sobre los controles de acceso y el caché. No necesitan MinIO ni GDAL:
+150 tests sobre los controles de acceso, el caché, el reporte de arranque, el
+piloto y el PNG de fuera del raster. No necesitan MinIO ni GDAL:
 `terra_tiles/` no importa TiTiler a propósito, para que la lógica sea testeable
 en aislamiento. `tests/` no entra en la imagen.
 
@@ -95,7 +97,30 @@ terra_tiles/
   settings.py        Settings (inmutable) + configure_gdal()
   security.py        validación del token (A01) y de la ruta (A10)
   caching.py         Cache-Control sobre /cog/tiles
+  health.py          comprobaciones de /health/ready
+  logging_config.py  el logging que uvicorn no configura por su cuenta
+  arranque.py        reporte de arranque: config y conexiones, sin secretos
+  png.py             el PNG transparente de fuera del raster, armado con código
+public/
+  piloto.html        /piloto: cómo pintar un COG en el mapa, para el front
+  leaflet-cog.html   /viewer: visor viejo de diagnóstico
+docs/                crónicas, y viaje-de-un-tile.html con los diagramas
 ```
+
+### Rutas propias (además de las de TiTiler)
+
+| Ruta | Token | Para qué |
+|---|---|---|
+| `/health` | no | Liveness de Railway. No consulta MinIO a propósito. |
+| `/health/ready` | no | Diagnóstico de config y storage. Nunca publica el endpoint interno. |
+| `/piloto` | no (los tiles sí) | Página para el front: el flujo real, paso a paso. |
+| `/viewer` | no (los tiles sí) | Visor viejo. Pasa `nodata=0`, que borra NDVI = 0: usar `/piloto`. |
+
+Dos respuestas propias sobre las de TiTiler: un tile **fuera del raster** es
+**200 con un PNG transparente** (no un error, para que el mapa no dibuje el
+ícono de tile roto), y un `/cog/point` fuera del raster es **404** con mensaje
+fijo. Los demás errores de rio-tiler salen como 500 **sin el mensaje crudo**,
+porque el de GDAL trae el endpoint de MinIO (`DECISIONS #28` del worker).
 
 `configure_gdal()` **tiene que correr antes de importar TiTiler**: GDAL lee sus
 variables al cargarse y fijarlas después se ignora en silencio. Por eso
@@ -135,7 +160,14 @@ sondea MinIO desde adentro y no necesita credenciales de escritura.
 
 ### Verificación post-deploy
 
-**Primero `/health/ready`.** Un solo pedido, sin token, y distingue las formas
+**Antes que nada, el log de arranque.** El servicio imprime al arrancar su
+configuración —el endpoint de MinIO y `MINIO_SECURE` en líneas contiguas, los
+secretos sólo por largo— y el resultado de las mismas comprobaciones de
+`/health/ready`. Lo que falla sale además como `ERROR`, así que sobrevive a
+cualquier `LOG_LEVEL`. Si ahí dice *"Todo verificado responde"*, lo que sigue es
+el tile real.
+
+**Después, `/health/ready`.** Un solo pedido, sin token, y distingue las formas
 conocidas de romper el deploy antes de que haga falta subir ningún COG:
 
 ```bash

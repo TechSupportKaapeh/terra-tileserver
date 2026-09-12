@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Copia versionada de la pagina publicada como artifact el 2026-09-11.
+     Se abre con doble click: no depende de nada mas que Google Fonts. -->
+<title>El viaje de un tile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ground: #f4f6f5;
+    --surface: #ffffff;
+    --surface-2: #eef1f2;
+    --ink: #1b2530;
+    --muted: #5b6875;
+    --rule: #d8dee2;
+    --accent: #2d4f6b;
+    --accent-soft: #dfe8f0;
+    --ok: #2f7d4f;
+    --ok-soft: #e2f1e8;
+    --warn: #9a620f;
+    --warn-soft: #fbf0dc;
+    --bad: #a23b2a;
+    --bad-soft: #f8e4e0;
+    --display: "Chivo", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f151b;
+      --surface: #151e27;
+      --surface-2: #1b2631;
+      --ink: #e4ebf0;
+      --muted: #93a3b1;
+      --rule: #2a3744;
+      --accent: #86afd1;
+      --accent-soft: #1c2b39;
+      --ok: #6cc08e;
+      --ok-soft: #16291f;
+      --warn: #e0a64a;
+      --warn-soft: #2d2415;
+      --bad: #e7806d;
+      --bad-soft: #321b17;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0f151b;
+    --surface: #151e27;
+    --surface-2: #1b2631;
+    --ink: #e4ebf0;
+    --muted: #93a3b1;
+    --rule: #2a3744;
+    --accent: #86afd1;
+    --accent-soft: #1c2b39;
+    --ok: #6cc08e;
+    --ok-soft: #16291f;
+    --warn: #e0a64a;
+    --warn-soft: #2d2415;
+    --bad: #e7806d;
+    --bad-soft: #321b17;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.6 var(--body);
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  .prosa { max-width: 68ch; }
+
+  .eyebrow {
+    font: 600 11px/1 var(--body);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1 {
+    font: 700 clamp(28px, 4vw, 38px)/1.12 var(--display);
+    margin: 10px 0 14px;
+    text-wrap: balance;
+  }
+  h2 {
+    font: 700 22px/1.25 var(--display);
+    margin: 56px 0 10px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    text-wrap: balance;
+  }
+  h3 { font: 700 16px/1.3 var(--display); margin: 28px 0 8px; }
+  p { margin: 0 0 12px; }
+  code {
+    font: 13px var(--mono);
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+  strong { font-weight: 600; }
+
+  .resumen {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--bad);
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin: 22px 0 10px;
+  }
+  .resumen p:last-child { margin: 0; }
+  .indice { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 18px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .indice a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+  .indice a:hover, .indice a:focus-visible { border-bottom-color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  figure {
+    margin: 22px 0 26px;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 18px 18px 14px;
+  }
+  figure svg { display: block; width: 100%; height: auto; color: var(--ink); }
+  figcaption { font-size: 13.5px; color: var(--muted); margin-top: 12px; max-width: 78ch; }
+
+  /* Clases de los diagramas: todo sale de los mismos tokens del tema. */
+  .d-caja { fill: var(--surface-2); stroke: currentColor; stroke-width: 1.2; }
+  .d-caja-acento { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+  .d-caja-punteada { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  .d-linea { fill: none; stroke: currentColor; stroke-width: 1.3; }
+  .d-linea-acento { fill: none; stroke: var(--accent); stroke-width: 2.2; }
+  .d-flecha { fill: currentColor; }
+  .d-flecha-acento { fill: var(--accent); }
+  .d-texto { fill: currentColor; font: 12px var(--body); }
+  .d-titulo { fill: currentColor; font: 600 13px var(--body); }
+  .d-mono { fill: currentColor; font: 11.5px var(--mono); }
+  .d-suave { fill: var(--muted); font: 11.5px var(--body); }
+  .d-acento { fill: var(--accent); font: 600 12px var(--body); }
+  .d-malo { fill: var(--bad); font: 600 12px var(--body); }
+  .d-bueno { fill: var(--ok); font: 600 12px var(--body); }
+  /* Algunos rect llevan fill/stroke con var() como atributo. No todos los
+     navegadores resuelven var() en un atributo de presentación, y si falla el
+     relleno cae a negro. Estas reglas los fijan desde CSS, que siempre gana. */
+  svg [fill="var(--bad-soft)"] { fill: var(--bad-soft); }
+  svg [fill="var(--ok-soft)"] { fill: var(--ok-soft); }
+  svg [stroke="var(--bad)"] { stroke: var(--bad); }
+  svg [stroke="var(--ok)"] { stroke: var(--ok); }
+  .d-bloque { fill: var(--surface-2); stroke: var(--rule); stroke-width: 1; }
+  .d-bloque-leido { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+
+  .tabla-caja { overflow-x: auto; margin: 14px 0 20px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; background: var(--surface); }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+  th {
+    font: 600 11.5px/1.3 var(--body);
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--muted);
+    background: var(--surface-2);
+  }
+  td:first-child { font-weight: 600; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .estado {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 12px/1 var(--mono);
+    padding: 4px 8px; border-radius: 999px; white-space: nowrap;
+  }
+  .estado::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .estado.ok { background: var(--ok-soft); color: var(--ok); }
+  .estado.warn { background: var(--warn-soft); color: var(--warn); }
+  .estado.bad { background: var(--bad-soft); color: var(--bad); }
+
+  .url {
+    font: 13px/1.7 var(--mono);
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 12px 14px;
+    overflow-wrap: anywhere;
+    margin: 12px 0;
+  }
+  .u-base { color: var(--muted); }
+  .u-geocore { color: var(--accent); font-weight: 500; }
+  .u-front { color: #7a4a9e; font-weight: 500; }
+  .u-token { color: var(--warn); font-weight: 500; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .u-front { color: #c49be6; } }
+  :root[data-theme="dark"] .u-front { color: #c49be6; }
+
+  .confianza { font-size: 12.5px; color: var(--muted); }
+  .confianza strong { color: var(--ink); }
+
+  ol.pendientes { padding-left: 22px; display: flex; flex-direction: column; gap: 10px; max-width: 78ch; }
+</style>
+
+<main>
+  <div class="eyebrow">Terra · tileserver · 11 de septiembre de 2026</div>
+  <h1>El viaje de un tile</h1>
+  <p class="prosa">Qué pasó con el cuadrado blanco del mapa, cómo viaja hoy un tile desde el satélite hasta la pantalla, y cómo resuelven lo mismo los servidores de tiles en general.</p>
+
+  <div class="resumen prosa">
+    <p><strong>En una línea:</strong> el cuadrado blanco era un bug del tileserver. Para los tiles que caen fuera de un raster devolvía un PNG que el código llamaba "transparente" y que en realidad era <strong>blanco opaco</strong>. Ya está arreglado en el código, con un test que lo verifica; llega a producción con el próximo despliegue del tileserver.</p>
+    <p>El raster en sí estaba bien formado. Pero tiene dato en sólo <strong>35 de sus 65.536 píxeles</strong>, así que casi no se ve.</p>
+  </div>
+
+  <ul class="indice">
+    <li><a href="#que-paso">1. Qué pasó</a></li>
+    <li><a href="#flujo">2. Cómo funciona hoy</a></li>
+    <li><a href="#adentro">3. Qué hace TiTiler con cada tile</a></li>
+    <li><a href="#industria">4. Cómo lo hacen los servidores de tiles</a></li>
+    <li><a href="#pendiente">5. Lo que queda</a></li>
+  </ul>
+
+  <!-- ================================================================ 1 -->
+  <h2 id="que-paso">1. Qué pasó</h2>
+  <p class="prosa">En el piloto, al pintar una capa real del worker —un heatmap de NDVI de una parcela en Monterrey— apareció un cuadrado blanco macizo al lado de un raster que casi no se veía.</p>
+
+  <figure>
+    <svg viewBox="0 0 760 350" role="img" aria-label="Grilla de tiles de zoom 14 alrededor del raster. El tile del centro es el raster, con 35 píxeles de dato. Un tile vecino, fuera del raster, recibe el PNG de fuera de bounds, que era blanco opaco: gris 255 y alfa 255. El arreglo lo cambia a alfa 0.">
+      <defs>
+        <marker id="d1-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="d-flecha"/>
+        </marker>
+        <pattern id="d1-damero" width="8" height="8" patternUnits="userSpaceOnUse">
+          <rect width="8" height="8" fill="#ffffff"/>
+          <rect width="4" height="4" fill="#c5ccd2"/>
+          <rect x="4" y="4" width="4" height="4" fill="#c5ccd2"/>
+        </pattern>
+      </defs>
+
+      <!-- grilla de tiles -->
+      <text x="160" y="36" text-anchor="middle" class="d-titulo">Tiles de zoom 14</text>
+      <g>
+        <rect x="40"  y="50"  width="80" height="80" class="d-caja-punteada"/>
+        <rect x="120" y="50"  width="80" height="80" class="d-caja-punteada"/>
+        <rect x="200" y="50"  width="80" height="80" class="d-caja-punteada"/>
+        <rect x="120" y="210" width="80" height="80" class="d-caja-punteada"/>
+        <rect x="200" y="130" width="80" height="80" class="d-caja-punteada"/>
+        <rect x="40"  y="210" width="80" height="80" class="d-caja-punteada"/>
+        <rect x="200" y="210" width="80" height="80" class="d-caja-punteada"/>
+        <!-- vecino pedido: blanco opaco -->
+        <rect x="40" y="130" width="80" height="80" fill="#ffffff" stroke="var(--bad)" stroke-width="2"/>
+        <text x="80" y="174" text-anchor="middle" class="d-malo">blanco</text>
+        <!-- el raster -->
+        <rect x="120" y="130" width="80" height="80" class="d-caja-acento"/>
+        <g fill="#ffffbf" stroke="#b9b27a" stroke-width=".8">
+          <rect x="152" y="160" width="5" height="5"/><rect x="157" y="160" width="5" height="5"/>
+          <rect x="162" y="160" width="5" height="5"/><rect x="152" y="165" width="5" height="5"/>
+          <rect x="157" y="165" width="5" height="5"/><rect x="162" y="165" width="5" height="5"/>
+          <rect x="157" y="170" width="5" height="5"/>
+        </g>
+      </g>
+      <rect x="40" y="306" width="12" height="12" class="d-caja-acento"/>
+      <text x="60" y="316" class="d-texto">el raster: tile 14/3626/6981, 35 px con dato</text>
+      <rect x="40" y="326" width="12" height="12" fill="#ffffff" stroke="var(--bad)" stroke-width="2"/>
+      <text x="60" y="336" class="d-texto">vecino fuera del raster → "PNG transparente"</text>
+
+      <!-- el PNG byte por byte -->
+      <text x="340" y="36" class="d-titulo">El "PNG transparente", byte por byte</text>
+      <text x="340" y="74" class="d-malo">antes</text>
+      <rect x="400" y="54" width="78" height="32" class="d-caja"/><text x="439" y="74" text-anchor="middle" class="d-mono">filtro 1</text>
+      <rect x="478" y="54" width="78" height="32" class="d-caja"/><text x="517" y="74" text-anchor="middle" class="d-mono">gris 255</text>
+      <rect x="556" y="54" width="78" height="32" fill="var(--bad-soft)" stroke="var(--bad)" stroke-width="1.6"/><text x="595" y="74" text-anchor="middle" class="d-mono">alfa 255</text>
+      <line x1="640" y1="70" x2="668" y2="70" class="d-linea" marker-end="url(#d1-f)"/>
+      <rect x="676" y="54" width="32" height="32" fill="#ffffff" stroke="currentColor"/>
+      <text x="692" y="104" text-anchor="middle" class="d-suave">opaco</text>
+
+      <text x="340" y="140" class="d-bueno">ahora</text>
+      <rect x="400" y="120" width="78" height="32" class="d-caja"/><text x="439" y="140" text-anchor="middle" class="d-mono">filtro 0</text>
+      <rect x="478" y="120" width="78" height="32" class="d-caja"/><text x="517" y="140" text-anchor="middle" class="d-mono">gris 0</text>
+      <rect x="556" y="120" width="78" height="32" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="1.6"/><text x="595" y="140" text-anchor="middle" class="d-mono">alfa 0</text>
+      <line x1="640" y1="136" x2="668" y2="136" class="d-linea" marker-end="url(#d1-f)"/>
+      <rect x="676" y="120" width="32" height="32" fill="url(#d1-damero)" stroke="currentColor"/>
+      <text x="692" y="170" text-anchor="middle" class="d-suave">transparente</text>
+
+      <!-- Leaflet estira el pixel -->
+      <text x="340" y="222" class="d-titulo">Leaflet estira ese píxel a todo el tile</text>
+      <rect x="400" y="262" width="6" height="6" fill="#ffffff" stroke="currentColor"/>
+      <text x="403" y="290" text-anchor="middle" class="d-mono">1×1</text>
+      <line x1="416" y1="265" x2="470" y2="265" class="d-linea" marker-end="url(#d1-f)"/>
+      <rect x="480" y="236" width="58" height="58" fill="#ffffff" stroke="var(--bad)" stroke-width="2"/>
+      <text x="509" y="310" text-anchor="middle" class="d-mono">256×256</text>
+      <text x="556" y="262" class="d-texto">un cuadrado blanco</text>
+      <text x="556" y="278" class="d-texto">macizo sobre el mapa</text>
+    </svg>
+    <figcaption>El tile vecino se pide, cae fuera del raster y el tileserver le contesta con su PNG de "fuera de bounds". Ese PNG tenía gris 255 y alfa 255, o sea blanco opaco, y Leaflet lo estiraba a 256×256. Qué vecino se pide depende de redondeos: el raster está alineado exacto a la grilla de zoom 14 y sus bounds difieren del borde del tile vecino en 10<sup>−14</sup> grados.</figcaption>
+  </figure>
+
+  <p class="confianza prosa"><strong>Qué está verificado y qué no.</strong> Los bytes del PNG, los datos del raster y las respuestas del tileserver están medidos. Que el vecino se pida por esa diferencia de 10<sup>−14</sup> grados es la explicación más probable, no una medición: Leaflet compara los bounds con cada tile, y con un raster alineado exacto a la grilla el resultado depende de redondeos.</p>
+
+  <h3>Todo lo que apareció, con su causa</h3>
+  <div class="tabla-caja">
+    <table>
+      <thead><tr><th>Síntoma</th><th>Causa</th><th>Cómo se verificó</th><th>Arreglo</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Cuadrado blanco junto al raster</td>
+          <td>El PNG de "fuera del raster" era blanco opaco. Un literal base64 comentado como transparente que nadie había decodificado.</td>
+          <td>Decodificado byte por byte: <code>[filtro 1, gris 255, alfa 255]</code>. Además, el CRC de su bloque de datos no cierra: el navegador lo dibujaba igual, y por eso nadie lo había notado.</td>
+          <td>El PNG ahora se arma con código, con alfa 0, y un test lo decodifica y mira el alfa.</td>
+        </tr>
+        <tr>
+          <td>El raster casi no se ve</td>
+          <td>Tiene dato en 35 de 65.536 píxeles (0,05 %). Su NDVI va de −0,03 a 0,18, típico de ciudad, y con <code>rescale=-1,1</code> cae en el centro de <code>rdylgn</code>, que es crema casi blanco.</td>
+          <td><code>/cog/statistics</code> y un tile real pedido al tileserver: 35 píxeles opacos, color <code>(254, 254, 189)</code>.</td>
+          <td>En TiTiler no hay nada que arreglar: es el dato. El piloto ahora avisa. Queda revisar por qué el heatmap tiene tan poco dato.</td>
+        </tr>
+        <tr>
+          <td><code>/cog/point</code> → 500</td>
+          <td>El click cayó fuera del raster, y TiTiler 0.18 no convierte eso en 404.</td>
+          <td>Reproducido localmente con la misma versión.</td>
+          <td>El tileserver ahora contesta 404 con mensaje fijo, y el piloto ya no pregunta por puntos fuera de los bounds.</td>
+        </tr>
+        <tr>
+          <td><code>/cog/colorMaps</code> → 404</td>
+          <td>Esa ruta es de otra pieza de TiTiler (<code>ColorMapFactory</code>) que el tileserver no monta. Fue un error mío en el piloto.</td>
+          <td>Localmente: 404 también.</td>
+          <td>El piloto arma la leyenda con las mismas paradas de color que usa TiTiler.</td>
+        </tr>
+        <tr>
+          <td>Con el COG de prueba, un cuadrado de un solo color</td>
+          <td><code>pruebas/test_cog.tif</code> son 10×10 píxeles, todos con valor 1. No es un NDVI.</td>
+          <td>Estadísticas locales: mín = máx = 1.</td>
+          <td>El piloto avisa cuando un raster es constante.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Una decisión que vale la pena recordar</h3>
+  <p class="prosa">Para que los errores de TiTiler dijeran su motivo, lo natural era registrar todos sus manejadores de errores. No se hizo: uno de ellos devuelve el mensaje crudo de cualquier excepción, y los errores de GDAL traen adentro el endpoint de S3. Lo verifiqué: dicen <code>Failed to connect to &lt;host&gt; port &lt;puerto&gt;</code>. Con el MinIO privado, eso publicaría <code>bucket.railway.internal:9000</code> en una respuesta HTTP, que es justo lo que <code>/health/ready</code> se cuida de no mostrar. Por eso se atendió <strong>sólo</strong> el caso del punto fuera del raster, con un mensaje fijo.</p>
+
+  <!-- ================================================================ 2 -->
+  <h2 id="flujo">2. Cómo funciona hoy</h2>
+  <p class="prosa">Hay dos momentos distintos. <strong>Antes de que nadie mire el mapa</strong>, el worker escribe: baja la imagen de Earth Engine, la convierte a COG, la sube a MinIO y registra la capa. <strong>Cuando alguien mira el mapa</strong>, el front consigue un permiso en Geocore y le pide los tiles directamente a TiTiler.</p>
+
+  <figure>
+    <svg viewBox="0 0 880 345" role="img" aria-label="Flujo entre servicios. El worker sube el COG a MinIO y registra la capa en la base geodata. El front le pide a Geocore el token de mapa y las capas. Después pide los tiles directamente a TiTiler, que valida el token y lee de MinIO sólo los bytes del tile.">
+      <defs>
+        <marker id="d2-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="d-flecha"/>
+        </marker>
+        <marker id="d2-fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="d-flecha-acento"/>
+        </marker>
+      </defs>
+
+      <!-- camino de los tiles, arriba -->
+      <polyline points="120,52 120,26 760,26 760,167" class="d-linea-acento" marker-start="url(#d2-fa)" marker-end="url(#d2-fa)"/>
+      <text x="440" y="18" text-anchor="middle" class="d-acento">③ /cog/tiles/{z}/{x}/{y}?url · rescale · colormap_name · token  ⇄  PNG — cientos por pantalla</text>
+
+      <!-- cajas -->
+      <rect x="30"  y="52"  width="180" height="60" rx="4" class="d-caja"/>
+      <text x="120" y="78"  text-anchor="middle" class="d-titulo">Front</text>
+      <text x="120" y="96"  text-anchor="middle" class="d-suave">terra-admin · Leaflet</text>
+
+      <rect x="350" y="52"  width="180" height="60" rx="4" class="d-caja"/>
+      <text x="440" y="78"  text-anchor="middle" class="d-titulo">Geocore</text>
+      <text x="440" y="96"  text-anchor="middle" class="d-suave">usuarios · tenants · catálogo</text>
+
+      <rect x="350" y="167" width="180" height="60" rx="4" class="d-caja"/>
+      <text x="440" y="193" text-anchor="middle" class="d-titulo">Postgres geodata</text>
+      <text x="440" y="211" text-anchor="middle" class="d-suave">tabla layers</text>
+
+      <rect x="670" y="167" width="180" height="60" rx="4" class="d-caja-acento"/>
+      <text x="760" y="193" text-anchor="middle" class="d-titulo">TiTiler</text>
+      <text x="760" y="211" text-anchor="middle" class="d-suave">valida token y ruta · pinta</text>
+
+      <rect x="30"  y="277" width="180" height="60" rx="4" class="d-caja"/>
+      <text x="120" y="303" text-anchor="middle" class="d-titulo">GeeWorker</text>
+      <text x="120" y="321" text-anchor="middle" class="d-suave">Earth Engine → COG</text>
+
+      <rect x="350" y="277" width="180" height="60" rx="4" class="d-caja"/>
+      <text x="440" y="303" text-anchor="middle" class="d-titulo">MinIO</text>
+      <text x="440" y="321" text-anchor="middle" class="d-suave">terra-assets · un COG por capa</text>
+
+      <!-- front <-> geocore -->
+      <line x1="210" y1="72" x2="348" y2="72" class="d-linea" marker-end="url(#d2-f)"/>
+      <text x="279" y="64" text-anchor="middle" class="d-texto">① token · ② capas</text>
+      <line x1="350" y1="94" x2="212" y2="94" class="d-linea" marker-end="url(#d2-f)"/>
+      <text x="279" y="110" text-anchor="middle" class="d-texto">token (1 h) + tiles[0]</text>
+
+      <!-- geocore -> geodata -->
+      <line x1="440" y1="112" x2="440" y2="165" class="d-linea" marker-end="url(#d2-f)"/>
+      <text x="448" y="143" class="d-texto">lee layers</text>
+
+      <!-- worker -> geodata / minio -->
+      <line x1="210" y1="287" x2="348" y2="214" class="d-linea" marker-end="url(#d2-f)"/>
+      <text x="236" y="236" class="d-texto">registra la capa</text>
+      <line x1="210" y1="307" x2="348" y2="307" class="d-linea" marker-end="url(#d2-f)"/>
+      <text x="279" y="299" text-anchor="middle" class="d-texto">sube el COG</text>
+
+      <!-- titiler -> minio -->
+      <polyline points="760,227 760,307 532,307" class="d-linea-acento" marker-end="url(#d2-fa)"/>
+      <text x="752" y="262" text-anchor="end" class="d-acento">HTTP Range</text>
+      <text x="752" y="278" text-anchor="end" class="d-suave">sólo los bloques del tile</text>
+    </svg>
+    <figcaption>Geocore aparece dos veces al principio (① y ②) y sale del camino. Los cientos de tiles de cada pantalla (③) van directo del front a TiTiler, que no habla con Geocore ni con la base: verifica la firma del token con el secreto que comparten y lee de MinIO sólo los bytes que necesita.</figcaption>
+  </figure>
+
+  <h3>Quién sabe qué</h3>
+  <div class="tabla-caja">
+    <table>
+      <thead><tr><th>Servicio</th><th>Qué sabe</th><th>Qué hace cuando se pide un tile</th></tr></thead>
+      <tbody>
+        <tr><td>Front</td><td>Quién es el usuario (sesión de Supabase)</td><td>Arma la URL y la pide. Renueva el token antes de que venza.</td></tr>
+        <tr><td>Geocore</td><td>Usuarios, tenants y qué capas existen</td><td>Nada: el token lo emitió antes, una vez por hora.</td></tr>
+        <tr><td>TiTiler</td><td>El secreto para <em>verificar</em> tokens, no para emitirlos</td><td>Valida firma, vencimiento y ruta; lee y pinta.</td></tr>
+        <tr><td>MinIO</td><td>Los bytes de cada COG</td><td>Sirve rangos de bytes.</td></tr>
+        <tr><td>GeeWorker</td><td>Cómo sacar un índice de Earth Engine</td><td>Nada: escribió el COG antes, una sola vez.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>La URL de un tile, parte por parte</h3>
+  <p class="prosa">Geocore entrega la plantilla con el servidor y el archivo. El front le agrega el resto.</p>
+  <div class="url"><span class="u-base">https://terra-tileserver-production.up.railway.app</span><span class="u-geocore">/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?url=s3://terra-assets/parcelas/…/…_ndvi.tif</span><span class="u-front">&amp;rescale=-1,1&amp;colormap_name=rdylgn</span><span class="u-token">&amp;token=eyJhbGci…</span></div>
+  <div class="tabla-caja">
+    <table>
+      <thead><tr><th>Parte</th><th>La pone</th><th>Para qué</th></tr></thead>
+      <tbody>
+        <tr><td><code>/cog/tiles/WebMercatorQuad/{z}/{x}/{y}</code></td><td><span class="u-geocore">Geocore</span></td><td>Qué tile. Leaflet reemplaza <code>{z}/{x}/{y}</code> por cada uno.</td></tr>
+        <tr><td><code>url=s3://terra-assets/…</code></td><td><span class="u-geocore">Geocore</span></td><td>Qué archivo. Fuera de <code>s3://terra-assets/</code> el tileserver contesta 400.</td></tr>
+        <tr><td><code>rescale=-1,1</code></td><td><span class="u-front">front</span></td><td>El COG guarda NDVI crudo: números, no colores. Esto dice qué valores van a cada punta de la paleta.</td></tr>
+        <tr><td><code>colormap_name=rdylgn</code></td><td><span class="u-front">front</span></td><td>La paleta. Tiene que coincidir con la leyenda que muestra la UI.</td></tr>
+        <tr><td><code>token=…</code></td><td><span class="u-token">front, cada hora</span></td><td>El permiso. Sin él, o vencido: 401.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================ 3 -->
+  <h2 id="adentro">3. Qué hace TiTiler con cada tile</h2>
+  <p class="prosa">Esta es la idea que hace posible todo lo demás. Un <strong>COG</strong> (Cloud Optimized GeoTIFF) es una imagen guardada en bloques, más copias reducidas de sí misma. Como cada bloque está en una posición conocida del archivo, TiTiler no necesita bajarse la imagen entera: pide por HTTP sólo los bytes de los bloques que tocan el tile.</p>
+
+  <figure>
+    <svg viewBox="0 0 760 280" role="img" aria-label="Un COG guarda la imagen en bloques y en overviews de menor resolución. Para un tile, TiTiler lee la cabecera, pide por HTTP Range sólo los bloques que lo tocan, recorta, aplica rescale y colormap, y devuelve un PNG con transparencia.">
+      <defs>
+        <marker id="d3-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="d-flecha-acento"/>
+        </marker>
+      </defs>
+      <text x="40" y="36" class="d-titulo">Un COG por dentro</text>
+      <text x="40" y="54" class="d-suave">bloques de 512×512 píxeles + overviews</text>
+
+      <text x="40" y="106" class="d-texto">resolución completa</text>
+      <g>
+        <rect x="40"  y="114" width="18" height="18" class="d-bloque"/><rect x="58"  y="114" width="18" height="18" class="d-bloque"/><rect x="76"  y="114" width="18" height="18" class="d-bloque"/><rect x="94"  y="114" width="18" height="18" class="d-bloque"/><rect x="112" y="114" width="18" height="18" class="d-bloque"/><rect x="130" y="114" width="18" height="18" class="d-bloque"/><rect x="148" y="114" width="18" height="18" class="d-bloque"/><rect x="166" y="114" width="18" height="18" class="d-bloque"/>
+        <rect x="40"  y="132" width="18" height="18" class="d-bloque"/><rect x="58"  y="132" width="18" height="18" class="d-bloque"/><rect x="76"  y="132" width="18" height="18" class="d-bloque"/><rect x="94"  y="132" width="18" height="18" class="d-bloque"/><rect x="112" y="132" width="18" height="18" class="d-bloque"/><rect x="130" y="132" width="18" height="18" class="d-bloque"/><rect x="148" y="132" width="18" height="18" class="d-bloque"/><rect x="166" y="132" width="18" height="18" class="d-bloque"/>
+        <rect x="40"  y="150" width="18" height="18" class="d-bloque"/><rect x="58"  y="150" width="18" height="18" class="d-bloque"/><rect x="76"  y="150" width="18" height="18" class="d-bloque"/><rect x="94"  y="150" width="18" height="18" class="d-bloque-leido"/><rect x="112" y="150" width="18" height="18" class="d-bloque-leido"/><rect x="130" y="150" width="18" height="18" class="d-bloque"/><rect x="148" y="150" width="18" height="18" class="d-bloque"/><rect x="166" y="150" width="18" height="18" class="d-bloque"/>
+        <rect x="40"  y="168" width="18" height="18" class="d-bloque"/><rect x="58"  y="168" width="18" height="18" class="d-bloque"/><rect x="76"  y="168" width="18" height="18" class="d-bloque"/><rect x="94"  y="168" width="18" height="18" class="d-bloque-leido"/><rect x="112" y="168" width="18" height="18" class="d-bloque-leido"/><rect x="130" y="168" width="18" height="18" class="d-bloque"/><rect x="148" y="168" width="18" height="18" class="d-bloque"/><rect x="166" y="168" width="18" height="18" class="d-bloque"/>
+        <rect x="40"  y="186" width="18" height="18" class="d-bloque"/><rect x="58"  y="186" width="18" height="18" class="d-bloque"/><rect x="76"  y="186" width="18" height="18" class="d-bloque"/><rect x="94"  y="186" width="18" height="18" class="d-bloque"/><rect x="112" y="186" width="18" height="18" class="d-bloque"/><rect x="130" y="186" width="18" height="18" class="d-bloque"/><rect x="148" y="186" width="18" height="18" class="d-bloque"/><rect x="166" y="186" width="18" height="18" class="d-bloque"/>
+        <rect x="40"  y="204" width="18" height="18" class="d-bloque"/><rect x="58"  y="204" width="18" height="18" class="d-bloque"/><rect x="76"  y="204" width="18" height="18" class="d-bloque"/><rect x="94"  y="204" width="18" height="18" class="d-bloque"/><rect x="112" y="204" width="18" height="18" class="d-bloque"/><rect x="130" y="204" width="18" height="18" class="d-bloque"/><rect x="148" y="204" width="18" height="18" class="d-bloque"/><rect x="166" y="204" width="18" height="18" class="d-bloque"/>
+      </g>
+      <text x="204" y="160" class="d-texto">overview</text>
+      <g>
+        <rect x="204" y="168" width="18" height="18" class="d-bloque"/><rect x="222" y="168" width="18" height="18" class="d-bloque"/><rect x="240" y="168" width="18" height="18" class="d-bloque"/>
+        <rect x="204" y="186" width="18" height="18" class="d-bloque"/><rect x="222" y="186" width="18" height="18" class="d-bloque"/><rect x="240" y="186" width="18" height="18" class="d-bloque"/>
+        <rect x="204" y="204" width="18" height="18" class="d-bloque"/><rect x="222" y="204" width="18" height="18" class="d-bloque"/><rect x="240" y="204" width="18" height="18" class="d-bloque"/>
+      </g>
+      <text x="40" y="246" class="d-suave">Zoom bajo: lee un overview, no la resolución completa.</text>
+
+      <!-- range -->
+      <line x1="134" y1="168" x2="408" y2="168" class="d-linea-acento" marker-end="url(#d3-f)"/>
+      <text x="340" y="160" text-anchor="middle" class="d-acento">HTTP Range</text>
+      <text x="340" y="186" text-anchor="middle" class="d-suave">sólo los 4 bloques</text>
+
+      <!-- titiler -->
+      <rect x="412" y="112" width="170" height="116" rx="4" class="d-caja-acento"/>
+      <text x="497" y="136" text-anchor="middle" class="d-titulo">TiTiler</text>
+      <text x="428" y="160" class="d-mono">1 · recorta el tile</text>
+      <text x="428" y="178" class="d-mono">2 · rescale</text>
+      <text x="428" y="196" class="d-mono">3 · colormap</text>
+      <text x="428" y="214" class="d-mono">4 · PNG + alfa</text>
+
+      <line x1="582" y1="170" x2="624" y2="170" class="d-linea" marker-end="url(#d3-f)"/>
+      <defs>
+        <linearGradient id="d3-rdylgn" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#a50026"/><stop offset=".25" stop-color="#f46d43"/>
+          <stop offset=".5" stop-color="#ffffbf"/><stop offset=".75" stop-color="#66bd63"/>
+          <stop offset="1" stop-color="#006837"/>
+        </linearGradient>
+      </defs>
+      <rect x="630" y="130" width="80" height="80" fill="url(#d3-rdylgn)" stroke="currentColor"/>
+      <text x="670" y="230" text-anchor="middle" class="d-mono">256×256 PNG</text>
+    </svg>
+    <figcaption>Primero lee la cabecera del COG, que dice dónde empieza cada bloque. Después pide por HTTP Range sólo los bloques que tocan el tile y, si el zoom es bajo, los de un overview. Por eso un único archivo alcanza para todos los zooms, y por eso el tileserver no necesita guardar tiles.</figcaption>
+  </figure>
+
+  <p class="prosa">Tres detalles de Terra que salen de acá. Los bloques de 512×512 los fija el worker al convertir. La máscara interna de píxeles sin dato también la agrega el worker (<code>add_mask</code>), y es lo que TiTiler vuelve transparente: por eso <strong>no hay que pasar <code>nodata=0</code></strong>, que además borraría los NDVI iguales a 0, que son reales. Y el zoom nativo, es decir el más fino que tiene sentido pedir, sale de <code>/cog/info</code>.</p>
+
+  <!-- ================================================================ 4 -->
+  <h2 id="industria">4. Cómo lo hacen normalmente los servidores de tiles</h2>
+  <p class="prosa">Todos resuelven lo mismo: convertir una imagen enorme en cuadraditos de 256×256 que un mapa pueda pedir por zoom. La diferencia de fondo es <strong>cuándo</strong> se pintan esos cuadraditos.</p>
+
+  <figure>
+    <svg viewBox="0 0 880 250" role="img" aria-label="Comparación. Pre-renderizado: se pinta toda la pirámide al escribir, se guardan millones de PNG y se sirven desde una CDN. Dinámico, como Terra: se guarda un COG y TiTiler pinta cada tile al pedirlo; lo habitual es poner una CDN adelante, que Terra no tiene.">
+      <defs>
+        <marker id="d4-f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" class="d-flecha"/>
+        </marker>
+      </defs>
+      <!-- fila A -->
+      <text x="20" y="34" class="d-titulo">Pre-renderizado</text>
+      <rect x="20"  y="46" width="110" height="46" rx="4" class="d-caja"/><text x="75"  y="74" text-anchor="middle" class="d-texto">imagen</text>
+      <rect x="170" y="46" width="170" height="46" rx="4" class="d-caja-acento"/><text x="255" y="66" text-anchor="middle" class="d-titulo">pinta la pirámide</text><text x="255" y="83" text-anchor="middle" class="d-suave">al escribir, una vez</text>
+      <rect x="380" y="46" width="150" height="46" rx="4" class="d-caja"/><text x="455" y="66" text-anchor="middle" class="d-texto">bucket de PNG</text><text x="455" y="83" text-anchor="middle" class="d-suave">millones de archivos</text>
+      <rect x="570" y="46" width="110" height="46" rx="4" class="d-caja"/><text x="625" y="74" text-anchor="middle" class="d-texto">CDN</text>
+      <rect x="720" y="46" width="140" height="46" rx="4" class="d-caja"/><text x="790" y="74" text-anchor="middle" class="d-texto">navegador</text>
+      <line x1="130" y1="69" x2="168" y2="69" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="340" y1="69" x2="378" y2="69" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="530" y1="69" x2="568" y2="69" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="680" y1="69" x2="718" y2="69" class="d-linea" marker-end="url(#d4-f)"/>
+      <text x="255" y="114" text-anchor="middle" class="d-suave">cada zoom × cada fecha × cada paleta</text>
+
+      <!-- fila B -->
+      <text x="20" y="158" class="d-titulo">Dinámico (Terra)</text>
+      <rect x="20"  y="170" width="110" height="46" rx="4" class="d-caja"/><text x="75"  y="198" text-anchor="middle" class="d-texto">imagen</text>
+      <rect x="170" y="170" width="170" height="46" rx="4" class="d-caja"/><text x="255" y="190" text-anchor="middle" class="d-texto">un COG</text><text x="255" y="207" text-anchor="middle" class="d-suave">un archivo por capa</text>
+      <rect x="380" y="170" width="150" height="46" rx="4" class="d-caja-acento"/><text x="455" y="190" text-anchor="middle" class="d-titulo">TiTiler pinta</text><text x="455" y="207" text-anchor="middle" class="d-suave">al pedir, cada tile</text>
+      <rect x="570" y="170" width="110" height="46" rx="4" class="d-caja-punteada"/><text x="625" y="190" text-anchor="middle" class="d-texto">CDN</text><text x="625" y="207" text-anchor="middle" class="d-suave">falta</text>
+      <rect x="720" y="170" width="140" height="46" rx="4" class="d-caja"/><text x="790" y="190" text-anchor="middle" class="d-texto">navegador</text><text x="790" y="207" text-anchor="middle" class="d-suave">caché de 1 año</text>
+      <line x1="130" y1="193" x2="168" y2="193" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="340" y1="193" x2="378" y2="193" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="530" y1="193" x2="568" y2="193" class="d-linea" marker-end="url(#d4-f)"/>
+      <line x1="680" y1="193" x2="718" y2="193" class="d-linea" marker-end="url(#d4-f)"/>
+      <text x="455" y="238" text-anchor="middle" class="d-suave">rescale y paleta distintos en cada pedido</text>
+    </svg>
+    <figcaption>La caja resaltada es donde se hace el trabajo. Pre-renderizado lo paga una vez al escribir, pero cualquier cambio de paleta o de rango obliga a repintar todo. Dinámico lo paga en cada tile, a cambio de que un solo archivo sirva cualquier paleta. En producción lo habitual es dinámico con una CDN adelante, que Terra todavía no tiene.</figcaption>
+  </figure>
+
+  <div class="tabla-caja">
+    <table>
+      <thead><tr><th>Enfoque</th><th>Cómo funciona</th><th>A favor</th><th>En contra</th><th>Ejemplos</th></tr></thead>
+      <tbody>
+        <tr><td>Pre-renderizado</td><td>Se pintan de antemano todos los tiles de todos los zooms y se guardan como archivos.</td><td>Lo más rápido y barato por pedido; ideal detrás de una CDN.</td><td>La pirámide crece muchísimo con cada fecha e índice. Cambiar la paleta es repintar todo.</td><td>gdal2tiles, MBTiles, PMTiles</td></tr>
+        <tr><td>Dinámico desde COG</td><td>Se guarda un archivo por raster; el servidor pinta cada tile al pedirlo.</td><td>Un solo archivo por capa. Paleta y rango se eligen en cada pedido.</td><td>Cuesta CPU por tile; necesita caché para escalar.</td><td>TiTiler, rio-tiler, Terracotta</td></tr>
+        <tr><td>Dinámico + CDN</td><td>Lo anterior, con una CDN que guarda los tiles ya pintados y los comparte entre usuarios.</td><td>Casi la velocidad del pre-renderizado sin la pirámide.</td><td>La clave de caché no puede llevar un token que cambia.</td><td>TiTiler detrás de CloudFront o Cloudflare</td></tr>
+        <tr><td>Servidores OGC</td><td>Estándares WMS y WMTS, con capas y estilos definidos en el servidor.</td><td>Hablan con cualquier GIS de escritorio.</td><td>Pesados de operar y configurar.</td><td>GeoServer, MapServer</td></tr>
+        <tr><td>Servicio administrado</td><td>Otro sirve los tiles y cobra por uso.</td><td>Cero infraestructura propia.</td><td>Costo y datos fuera de casa.</td><td>Mapbox, ArcGIS, Earth Engine (<code>getMapId</code>)</td></tr>
+        <tr><td>Vector tiles</td><td>Se corta la geometría por tile y el cliente la dibuja.</td><td>Livianos, y el estilo se cambia en el cliente.</td><td>Sirven para polígonos, no para rásters.</td><td>PostGIS <code>ST_AsMVT</code>, Martin</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prosa">Curiosidad útil: el visor de Earth Engine funciona igual que Terra. <code>getMapId</code> devuelve una plantilla de URL de tiles con un identificador de acceso, y los tiles se pintan al pedirlos. La diferencia es que ahí el servidor de tiles es de Google.</p>
+
+  <h3>Prácticas habituales, y dónde está Terra</h3>
+  <div class="tabla-caja">
+    <table>
+      <thead><tr><th>Práctica</th><th>Por qué</th><th>Terra hoy</th></tr></thead>
+      <tbody>
+        <tr><td>Fuera del raster: vacío y transparente, nunca un error</td><td>Ante un error, los mapas dibujan un ícono de tile roto en todo el borde.</td><td><span class="estado ok">desde hoy</span> Antes era blanco opaco.</td></tr>
+        <tr><td>Errores con código, sin detalles internos</td><td>El mensaje de un error de lectura puede publicar hosts y rutas.</td><td><span class="estado ok">sí</span> Por eso no se registró el manejador genérico.</td></tr>
+        <tr><td>Tiles inmutables con caché largo</td><td>El tile de una fecha nunca cambia.</td><td><span class="estado ok">sí</span> 1 año en <code>/cog/tiles</code>.</td></tr>
+        <tr><td>Overviews y zoom nativo</td><td>En zoom bajo no hay que leer la resolución completa, ni pedir más fino que el dato.</td><td><span class="estado warn">a medias</span> El worker genera overviews, pero Geocore manda <code>maxzoom: 18</code> fijo.</td></tr>
+        <tr><td>El token fuera de la clave de caché</td><td>Si el token va en la URL, el caché dura lo que dura el token.</td><td><span class="estado warn">no</span> El token va en la query: el caché de un año rinde una hora.</td></tr>
+        <tr><td>Permiso atado al recurso</td><td>Que un token no abra datos de otro cliente.</td><td><span class="estado bad">no</span> El token de mapa no lleva el tenant, y TiTiler sólo mira que la ruta esté en el bucket.</td></tr>
+        <tr><td>CDN delante del servidor de tiles</td><td>Un caché compartido entre usuarios, cerca de ellos.</td><td><span class="estado bad">no</span> Cada tile se pinta de nuevo para cada usuario.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================ 5 -->
+  <h2 id="pendiente">5. Lo que queda</h2>
+  <ol class="pendientes">
+    <li><strong>Desplegar el tileserver.</strong> El arreglo está en el código. Después de desplegar, si todavía ves cuadrados blancos, es caché del navegador: los tiles llevan caché de un año y la URL incluye el token, así que alcanza con pedir un token nuevo.</li>
+    <li><strong>Revisar por qué el heatmap tiene tan poco dato.</strong> 35 píxeles en un tile de 2,2 km pueden ser una parcela chica dibujada sobre la ciudad —el NDVI es de zona urbana— o un recorte que salió mal. Es una pregunta sobre los datos del worker, no sobre TiTiler.</li>
+    <li><strong>Atar el token de mapa al tenant.</strong> Hoy cualquier usuario activo puede leer cualquier COG cuya ruta conozca. Lo único que lo impide es que la ruta lleva un UUID. El arreglo es poner el tenant en el token y en la ruta del archivo, y que TiTiler los compare.</li>
+    <li><strong>Sacar el token de la URL de los tiles.</strong> Mandarlo como header —en Leaflet hace falta un <code>TileLayer</code> que pida con <code>fetch</code>— o pasar a tokens de más duración. Así el caché de un año sirve de verdad.</li>
+    <li><strong>Una CDN adelante</strong>, cuando haya tráfico que la justifique.</li>
+  </ol>
+</main>
