@@ -1,0 +1,52 @@
+# CI del tileserver (tarea M.0.5 de geework 2.0/docs/SPRINTS_FASE_M.md; el
+# criterio común a los cuatro repos está en DECISIONS #34 del worker).
+#
+# Nada llega a `main` —ni a Railway, con "Wait for CI"— sin `pytest` en verde.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Solo lectura: el CI no escribe en el repo ni publica nada.
+permissions:
+  contents: read
+
+# Un push nuevo a un PR cancela la corrida anterior del mismo PR. En `main` no se
+# cancela: cada commit que llega a producción tiene que tener su resultado.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    # Es el nombre del check obligatorio en la protección de `main` (M.0.6):
+    # cambiarlo obliga a cambiar esa regla.
+    name: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      # 3.11 es la del Dockerfile (`python:3.11-slim`): el CI prueba con la misma
+      # versión que corre en Railway.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # Se instala igual que en el Dockerfile. `requirements-dev.txt` ya incluye
+      # `requirements.txt`.
+      - name: Instalar dependencias
+        run: python -m pip install -r requirements-dev.txt
+
+      # `pytest.ini` fija `testpaths = tests`. Sin .env ni MinIO: se verificó el
+      # 2026-09-14 desde un clon limpio.
+      - name: pytest
+        run: python -m pytest
