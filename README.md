@@ -89,6 +89,11 @@ piloto y el PNG de fuera del raster. No necesitan MinIO ni GDAL:
 `terra_tiles/` no importa TiTiler a propósito, para que la lógica sea testeable
 en aislamiento. `tests/` no entra en la imagen.
 
+**Desde el 2026-09-14 también los corre el CI** (`.github/workflows/ci.yml`), en
+cada PR y en cada push a `main`, con Python 3.11, la del Dockerfile. Qué corre
+cada uno de los cuatro repos, y cómo proteger `main`, en
+`geework 2.0/docs/CI.md` (`DECISIONS #34` del worker).
+
 ### Estructura
 
 ```
