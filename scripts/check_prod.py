@@ -8,20 +8,24 @@ vez pero no dice cuál se rompió cuando da error.
     escalón 1  /health              el proceso vive
     escalón 2  /health/ready        config + MinIO alcanzable
     escalón 3  /cog/info sin token  el control de acceso está activo
-    escalón 4  /cog/info con token  el token vale Y GDAL abre el COG por vsis3
-    escalón 5  un tile              rio-tiler renderiza y devuelve PNG
-    escalón 6  Cache-Control        el header de caché está puesto
-    escalón 7  tile fuera de borde  PNG transparente, no un error
+    escalón 4  COG de otro tenant   403: el aislamiento está activo (M.8.1)
+    escalón 5  /cog/info con token  el token vale Y GDAL abre el COG por vsis3
+    escalón 6  un tile              rio-tiler renderiza y devuelve PNG
+    escalón 7  Cache-Control        el header de caché está puesto
+    escalón 8  tile fuera de borde  PNG transparente, no un error
 
 Uso:
 
     python scripts/check_prod.py \\
         --base  https://<titiler>.up.railway.app \\
         --token "$TOKEN" \\
-        --key   ranchos/<id>/pasadas/<fecha>/ndvi.tif
+        --key   tenants/<tenant>/ranchos/<id>/s2-mensual-v1/ndvi/2026-08.tif
 
-El token sale de `GET /api/maps/token` de Geocore y dura 1 h. No se imprime
-nunca: los mensajes de error de este script se pegan en chats y tickets.
+El token sale de `GET /api/maps/token` de Geocore —con `X-Tenant-ID`, desde
+M.8.1— y dura 1 h. Tiene que ser el token **del mismo tenant** que la key: desde
+M.8.1 el tileserver sólo sirve lo que cuelga de `tenants/{tenant del token}/`.
+El token no se imprime nunca: los mensajes de error de este script se pegan en
+chats y tickets.
 
 Solo usa la librería estándar, así que corre con cualquier Python 3.9+ sin
 instalar nada — incluido el equipo que no tenga el proyecto clonado.
@@ -157,8 +161,56 @@ def escalon_sin_token(base: str, url_cog: str) -> None:
         aviso("/cog/info sin token", f"esperaba 401, dio {status}")
 
 
+def _key_de_otro_tenant(url_cog: str) -> str | None:
+    """La misma key con el uuid del tenant cambiado, o None si no se puede.
+
+    Sirve para probar el aislamiento **sin un segundo token**: el token que hay
+    es de un tenant y esta key es de otro, que es exactamente el caso que M.8.1
+    cierra. El uuid inventado no necesita existir: si el control funciona, la
+    respuesta llega antes de que nadie toque el bucket.
+    """
+    marca = "/tenants/"
+    corte = url_cog.find(marca)
+    if corte < 0:
+        return None
+    resto = url_cog[corte + len(marca):]
+    barra = resto.find("/")
+    if barra < 0:
+        return None
+    ajeno = "00000000-0000-4000-8000-000000000000"
+    return f"{url_cog[:corte]}{marca}{ajeno}/{resto[barra + 1:]}"
+
+
+def escalon_tenant_ajeno(base: str, url_cog: str, token: str) -> None:
+    titulo("4. Aislamiento entre tenants")
+    ajena = _key_de_otro_tenant(url_cog)
+    if ajena is None:
+        aviso("COG de otro tenant",
+              "la --key no tiene la forma tenants/<uuid>/…, así que no se puede "
+              "construir la de otro tenant. Desde M.8.1 una key así tampoco se "
+              "puede servir: probá con una del pipeline mensual.")
+        return
+
+    status, cuerpo, _ = pedir(_query(base, "/cog/info", url=ajena, token=token))
+    if status == 403:
+        ok("/cog/info con la key de otro tenant", "403 — el aislamiento está activo")
+    elif status == 200:
+        fallo("/cog/info con la key de otro tenant",
+              "200 CON UN COG DE OTRO TENANT. El token no lleva tenant, o el "
+              "tileserver no lo está comparando. Es el agujero que cierra M.8.1.")
+    elif status == 401:
+        fallo("/cog/info con la key de otro tenant",
+              "401: el token no valida. El escalón 5 dice por qué; este escalón "
+              "no prueba nada hasta que el token sirva.")
+    else:
+        # Un 500 sería "pasó el control y GDAL no encontró el objeto": el
+        # control no está puesto, aunque no se vea ningún dato ajeno.
+        aviso("/cog/info con la key de otro tenant",
+              f"esperaba 403, dio {status}: {_json(cuerpo)}")
+
+
 def escalon_info(base: str, url_cog: str, token: str) -> dict | None:
-    titulo("4. Token válido + lectura del COG desde MinIO")
+    titulo("5. Token válido + lectura del COG desde MinIO")
     status, cuerpo, _ = pedir(_query(base, "/cog/info", url=url_cog, token=token))
     datos = _json(cuerpo)
 
@@ -175,6 +227,11 @@ def escalon_info(base: str, url_cog: str, token: str) -> dict | None:
         fallo("/cog/info con token",
               f"400: {datos}. MINIO_BUCKET no coincide con GeoData__MinioBucket, "
               "o la key se guardó con el prefijo s3:// incluido.")
+    elif status == 403:
+        fallo("/cog/info con token",
+              f"403: {datos}. El token es de OTRO tenant que la --key, o es un "
+              "token viejo sin tenant adentro (M.8.1). Pedí uno nuevo con el "
+              "X-Tenant-ID del dueño de esta key.")
     elif status == 500:
         fallo("/cog/info con token",
               "500: la URL pasó el filtro pero GDAL no pudo abrir el COG. "
@@ -186,7 +243,7 @@ def escalon_info(base: str, url_cog: str, token: str) -> dict | None:
 
 
 def escalon_tile(base: str, url_cog: str, token: str, info: dict) -> None:
-    titulo("5. Un tile real")
+    titulo("6. Un tile real")
     z, x, y = _tile_del_centro(base, url_cog, token, info)
     print(f"          tile elegido: z={z} x={x} y={y}")
 
@@ -202,7 +259,7 @@ def escalon_tile(base: str, url_cog: str, token: str, info: dict) -> None:
         return
     ok("tile", f"200, PNG de {len(cuerpo)} bytes")
 
-    titulo("6. Caché")
+    titulo("7. Caché")
     cache = headers.get("Cache-Control") or headers.get("cache-control")
     if cache and "immutable" in cache:
         ok("Cache-Control", cache)
@@ -211,7 +268,7 @@ def escalon_tile(base: str, url_cog: str, token: str, info: dict) -> None:
     else:
         aviso("Cache-Control", "ausente. El navegador va a repedir cada tile en cada pan/zoom.")
 
-    titulo("7. Borde del raster")
+    titulo("8. Borde del raster")
     # Un tile lejísimos del dato: tiene que salir PNG transparente y no un error,
     # o el visor dibuja el ícono de "tile roto" en todo el borde de la capa.
     status, cuerpo, _ = pedir(_query(
@@ -254,8 +311,9 @@ def main() -> int:
     p.add_argument("--base", required=True, help="URL del tileserver, con https://")
     p.add_argument("--token", required=True, help="JWT de GET /api/maps/token de Geocore")
     p.add_argument("--key", required=True,
-                   help="storage_key del COG, sin s3:// ni bucket "
-                        "(ej: ranchos/<id>/pasadas/<fecha>/ndvi.tif)")
+                   help="storage_key del COG, sin s3:// ni bucket (ej: "
+                        "tenants/<tenant>/ranchos/<id>/s2-mensual-v1/ndvi/2026-08.tif). "
+                        "Desde M.8.1 tiene que ser del mismo tenant que el --token")
     p.add_argument("--bucket", default="terra-assets")
     args = p.parse_args()
 
@@ -272,11 +330,12 @@ def main() -> int:
     escalon_health(base)
     escalon_ready(base)
     escalon_sin_token(base, url_cog)
+    escalon_tenant_ajeno(base, url_cog, args.token)
     info = escalon_info(base, url_cog, args.token)
     if info:
         escalon_tile(base, url_cog, args.token, info)
     else:
-        titulo("5-7. Tiles")
+        titulo("6-8. Tiles")
         print("  omitidos: sin /cog/info no tiene sentido pedir un tile.")
 
     print("\n" + "=" * 70)
@@ -289,8 +348,8 @@ def main() -> int:
         for a in _avisos:
             print(f"  - {a}")
     if not _fallos:
-        print("Cadena completa verificada: token, red privada, credenciales de "
-              "lectura, convención de keys y render.")
+        print("Cadena completa verificada: token, aislamiento por tenant, red "
+              "privada, credenciales de lectura, convención de keys y render.")
         if not _avisos:
             print("Sin avisos.")
     return 1 if _fallos else 0

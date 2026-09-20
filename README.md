@@ -12,10 +12,13 @@ capas en `geodata.layers` es el worker; acá solo se lee.
 ## Su lugar en el ecosistema
 
 ```
-front ──GET /api/layers/{id}──▶ Geocore ──arma la URL──┐
-front ──GET /api/maps/token──▶ Geocore ──firma JWT─────┤
-                                                        ▼
+front ──GET /api/layers/{id}────────▶ Geocore ──arma la URL──┐
+front ──GET /api/maps/token────────▶ Geocore ──firma JWT──────┤
+        + X-Tenant-ID                (con el tenant adentro)   ▼
 front ──GET /cog/tiles/{z}/{x}/{y}?url=…&token=…──▶ TiTiler ──/vsis3/──▶ MinIO
+                                                        │
+                                          ¿la key cuelga de tenants/{tenant
+                                          del token}/?  si no → 403
 ```
 
 Geocore compone la URL como `s3://{GeoData:MinioBucket}/{layers.storage_key}`.
@@ -47,6 +50,12 @@ Esto es lo que más se rompe en deploy, porque nada lo valida y falla en silenci
 | `MAP_TOKEN_SECRET` | `GeoData__MapTokenSecret` | Todos los tiles dan 401 |
 | `MINIO_BUCKET` | `GeoData__MinioBucket` | Geocore arma URLs de un bucket que este servicio rechaza: **400 `URL_NO_PERMITIDA`** por tile |
 
+Y una tercera cosa que tiene que coincidir, y que **no es una variable**: el
+nombre del claim del tenant. Acá se lee `tenant_id` (`security.CLAIM_TENANT`) y
+Geocore lo firma con ese nombre (`MapsController.TenantClaim`). Cambiarlo de un
+solo lado no rompe nada visible: el token sigue siendo válido y **todos** los
+COG pasan a dar 403.
+
 ---
 
 ## Seguridad
@@ -64,6 +73,42 @@ fallen igual y el problema sea diagnosticable desde los logs.
 **Las credenciales de MinIO deben ser de solo lectura.** Este servicio se expone
 al público (sirve tiles al navegador). Con credenciales de escritura, una falla
 acá pone en riesgo el bucket entero.
+
+### El token es de un tenant (M.8.1, OWASP A01)
+
+Hasta el 2026-09-20 el token decía **quién** pedía tiles y no decía **cuáles**:
+validado firma, emisor, audiencia y `type`, se servía cualquier COG del bucket.
+La key viaja a la vista en la URL del tile, así que un usuario con su token
+legítimo y la key de otro tenant veía los rásters de ese otro tenant.
+
+Ahora el token lleva el claim `tenant_id` y **la ruta tiene que caer bajo
+`s3://{MINIO_BUCKET}/tenants/{ese tenant}/`**:
+
+| Caso | Respuesta |
+|---|---|
+| COG del propio tenant | se sirve |
+| COG de otro tenant | **403 `TENANT_AJENO`** |
+| Token sin `tenant_id` (emitido antes del cambio) | **403 `TOKEN_SIN_TENANT`** |
+| Cualquier URL fuera del bucket | **400 `URL_NO_PERMITIDA`**, como antes |
+
+**Los dos controles ya no son independientes**: el de ruta depende del de token,
+y se le pasa la **misma** función —no otra igual— para que FastAPI la resuelva
+una sola vez por pedido y no haya dos lecturas del claim que puedan discrepar.
+
+La comparación lleva **la barra final** (`tenants/{id}/`): sin ella, el prefijo
+de un tenant sería también el comienzo de cualquier otro id que empezara igual.
+
+Las capas **anteriores al pipeline mensual** tienen keys sin tenant
+(`parcelas/{id}/…`, `ranchos/{id}/…`) y por lo tanto **ya no se pueden servir**.
+Se borran con sus filas: Geocore `DECISIONS #43`.
+
+**Lo que este control no alcanza:** los assets listados *dentro* de un
+MosaicJSON. El tenant se compara contra la URL del documento, no contra lo que
+el documento lista, y `cogeo-mosaic` abre esos assets tal como vengan. Lo
+contiene lo mismo que contiene el hallazgo T-3 del mapeo OWASP —sólo `worker-rw`
+escribe en el bucket, así que un mosaico sólo aparece ahí si lo puso el worker—,
+pero desde M.8.1 lo que se saltearía es el aislamiento entre tenants, no sólo el
+filtro anti-SSRF.
 
 ---
 
@@ -84,10 +129,15 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-150 tests sobre los controles de acceso, el caché, el reporte de arranque, el
-piloto y el PNG de fuera del raster. No necesitan MinIO ni GDAL:
+185 tests sobre los controles de acceso, el caché, el reporte de arranque, el
+piloto y el PNG de fuera del raster. Casi ninguno necesita MinIO ni GDAL:
 `terra_tiles/` no importa TiTiler a propósito, para que la lógica sea testeable
 en aislamiento. `tests/` no entra en la imagen.
+
+La excepción es `tests/test_app_tenant.py`, que **sí** levanta la app entera con
+TiTiler montado (sin red: el endpoint de MinIO apunta a un puerto cerrado).
+Prueba lo que ninguna función puede probar sola: que `main.py` conecte los dos
+controles y que FastAPI resuelva la dependencia anidada en un pedido real.
 
 **Desde el 2026-09-14 también los corre el CI** (`.github/workflows/ci.yml`), en
 cada PR y en cada push a `main`, con Python 3.11, la del Dockerfile. Qué corre
@@ -100,7 +150,8 @@ cada uno de los cuatro repos, y cómo proteger `main`, en
 main.py              composición: lee config, arma dependencias, conecta
 terra_tiles/
   settings.py        Settings (inmutable) + configure_gdal()
-  security.py        validación del token (A01) y de la ruta (A10)
+  security.py        validación del token y de la ruta: quién pide (A01), qué
+                     puede pedir (A01 por tenant, A10 contra SSRF)
   caching.py         Cache-Control sobre /cog/tiles
   health.py          comprobaciones de /health/ready
   logging_config.py  el logging que uvicorn no configura por su cuenta
@@ -238,5 +289,7 @@ Para cerrar el flujo hace falta un tile real con un token de
 | **503** | Falta `MAP_TOKEN_SECRET` |
 | **401** *con* token válido | El secreto no coincide con el de Geocore, o el token expiró (dura 1 h) |
 | **400 `URL_NO_PERMITIDA`** | `MINIO_BUCKET` no coincide con `GeoData__MinioBucket`, o `storage_key` quedó guardado con el prefijo `s3://` |
+| **403 `TENANT_AJENO`** | El token es de otro tenant que la key. No se arregla reintentando: pedí el token con el `X-Tenant-ID` del dueño de esa capa. Si la key no empieza con `tenants/`, es una capa vieja y ya no se sirve |
+| **403 `TOKEN_SIN_TENANT`** | Token emitido antes de M.8.1, o una Geocore anterior al cambio. Dura lo que dura un token: 1 h |
 | **500** | La URL pasó el filtro pero GDAL no pudo abrir el COG: la key no existe, o `tiler-ro` no tiene permiso |
 | Timeout | `MINIO_ENDPOINT` mal escrito, o los servicios están en proyectos de Railway distintos |

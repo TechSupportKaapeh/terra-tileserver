@@ -408,7 +408,7 @@
       <tbody>
         <tr><td>Front</td><td>Quién es el usuario (sesión de Supabase)</td><td>Arma la URL y la pide. Renueva el token antes de que venza.</td></tr>
         <tr><td>Geocore</td><td>Usuarios, tenants y qué capas existen</td><td>Nada: el token lo emitió antes, una vez por hora.</td></tr>
-        <tr><td>TiTiler</td><td>El secreto para <em>verificar</em> tokens, no para emitirlos</td><td>Valida firma, vencimiento y ruta; lee y pinta.</td></tr>
+        <tr><td>TiTiler</td><td>El secreto para <em>verificar</em> tokens, no para emitirlos</td><td>Valida firma, vencimiento y ruta, y que la ruta sea <strong>del tenant del token</strong>; lee y pinta.</td></tr>
         <tr><td>MinIO</td><td>Los bytes de cada COG</td><td>Sirve rangos de bytes.</td></tr>
         <tr><td>GeeWorker</td><td>Cómo sacar un índice de Earth Engine</td><td>Nada: escribió el COG antes, una sola vez.</td></tr>
       </tbody>
@@ -417,16 +417,16 @@
 
   <h3>La URL de un tile, parte por parte</h3>
   <p class="prosa">Geocore entrega la plantilla con el servidor y el archivo. El front le agrega el resto.</p>
-  <div class="url"><span class="u-base">https://terra-tileserver-production.up.railway.app</span><span class="u-geocore">/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?url=s3://terra-assets/parcelas/…/…_ndvi.tif</span><span class="u-front">&amp;rescale=-1,1&amp;colormap_name=rdylgn</span><span class="u-token">&amp;token=eyJhbGci…</span></div>
+  <div class="url"><span class="u-base">https://terra-tileserver-production.up.railway.app</span><span class="u-geocore">/cog/tiles/WebMercatorQuad/{z}/{x}/{y}@1x?url=s3://terra-assets/tenants/…/ranchos/…/s2-mensual-v1/ndvi/2026-08.tif</span><span class="u-front">&amp;rescale=-1,1&amp;colormap_name=rdylgn</span><span class="u-token">&amp;token=eyJhbGci…</span></div>
   <div class="tabla-caja">
     <table>
       <thead><tr><th>Parte</th><th>La pone</th><th>Para qué</th></tr></thead>
       <tbody>
         <tr><td><code>/cog/tiles/WebMercatorQuad/{z}/{x}/{y}</code></td><td><span class="u-geocore">Geocore</span></td><td>Qué tile. Leaflet reemplaza <code>{z}/{x}/{y}</code> por cada uno.</td></tr>
-        <tr><td><code>url=s3://terra-assets/…</code></td><td><span class="u-geocore">Geocore</span></td><td>Qué archivo. Fuera de <code>s3://terra-assets/</code> el tileserver contesta 400.</td></tr>
+        <tr><td><code>url=s3://terra-assets/tenants/…</code></td><td><span class="u-geocore">Geocore</span></td><td>Qué archivo. Fuera de <code>s3://terra-assets/</code> el tileserver contesta 400; dentro, pero de <strong>otro tenant</strong> que el del token, 403 (M.8.1).</td></tr>
         <tr><td><code>rescale=-1,1</code></td><td><span class="u-front">front</span></td><td>El COG guarda NDVI crudo: números, no colores. Esto dice qué valores van a cada punta de la paleta.</td></tr>
         <tr><td><code>colormap_name=rdylgn</code></td><td><span class="u-front">front</span></td><td>La paleta. Tiene que coincidir con la leyenda que muestra la UI.</td></tr>
-        <tr><td><code>token=…</code></td><td><span class="u-token">front, cada hora</span></td><td>El permiso. Sin él, o vencido: 401.</td></tr>
+        <tr><td><code>token=…</code></td><td><span class="u-token">front, cada hora</span></td><td>El permiso, y <strong>de qué tenant</strong>: lleva <code>tenant_id</code> adentro. Sin él, o vencido: 401.</td></tr>
       </tbody>
     </table>
   </div>
