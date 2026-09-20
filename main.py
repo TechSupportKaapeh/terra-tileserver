@@ -11,7 +11,8 @@ conecta. La lógica vive en `terra_tiles/`, sin importar TiTiler, para que se
 pueda testear sin la pila geoespacial.
 
 Controles de acceso y su categoría OWASP:
-  A01 Broken Access Control  -> `crear_validador_de_token` en cada `/cog/*`
+  A01 Broken Access Control  -> `crear_validador_de_token` en cada `/cog/*`, y
+                                la key acotada al tenant del token (M.8.1)
   A10 SSRF                   -> `crear_validador_de_ruta` sobre `?url=`
   A05 Security Misconfig.    -> sin secreto por defecto; CORS explícito
 """
@@ -159,9 +160,15 @@ async def point_outside_bounds_handler(request: Request, exc: PointOutsideBounds
 # Los dos routers comparten los mismos controles: el token decide QUIÉN pide, y
 # el validador de ruta decide QUÉ puede pedirse. Se construyen una sola vez para
 # que no puedan divergir entre endpoints.
-verificar_token = Depends(crear_validador_de_token(settings.map_token_secret,
-                                                   settings.token_leeway_seconds))
-validar_ruta = crear_validador_de_ruta(settings.prefijo_valido)
+#
+# Desde M.8.1 el segundo **depende** del primero: el token dice de qué tenant es
+# quien pide, y la ruta tiene que caer bajo `tenants/{ese tenant}/`. Se le pasa
+# la misma función —no otra igual— para que FastAPI la resuelva una sola vez por
+# pedido y no haya dos lecturas del claim que puedan discrepar.
+validador_token = crear_validador_de_token(settings.map_token_secret,
+                                           settings.token_leeway_seconds)
+verificar_token = Depends(validador_token)
+validar_ruta = crear_validador_de_ruta(settings.prefijo_valido, validador_token)
 
 # Endpoints COG: /cog/tiles/{TileMatrixSetId}/{z}/{x}/{y}, /cog/info, /cog/bounds…
 cog = TilerFactory(path_dependency=validar_ruta)
@@ -175,6 +182,13 @@ app.include_router(cog.router, prefix="/cog", tags=["COG"], dependencies=[verifi
 # contenido porque solo `worker-rw` puede escribir en el bucket, así que un
 # MosaicJSON solo puede aparecer ahí si lo puso el worker. Si alguna vez se
 # aceptan mosaicos de otro origen, hay que validar también los assets.
+#
+# **Desde M.8.1 esa grieta tiene una consecuencia más, y conviene decirla:** el
+# tenant se compara contra la URL del MosaicJSON, no contra sus assets, así que
+# un documento que listara COG de otro tenant los serviría. Sigue conteniéndolo
+# lo mismo —sólo el worker escribe, y escribe un mosaico por tenant—, pero ahora
+# lo que se saltearía es el aislamiento, no sólo el filtro anti-SSRF. Es el
+# hallazgo T-3 del mapeo OWASP.
 mosaico = MosaicTilerFactory(path_dependency=validar_ruta)
 app.include_router(mosaico.router, prefix="/mosaic", tags=["MosaicJSON"],
                    dependencies=[verificar_token])

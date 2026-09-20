@@ -377,6 +377,7 @@
     <section class="paso">
       <div class="paso-cab"><span class="num">2</span><h2>El token de mapa</h2></div>
       <p>Cada tile necesita <code>&amp;token=…</code>. Lo emite Geocore en <code>GET /api/maps/token</code>, firmado con el secreto que comparte con el tileserver. <strong>Dura una hora.</strong></p>
+      <p><strong>Es de un tenant.</strong> Va con <code>X-Tenant-ID</code>, y el tileserver sólo sirve los COG que cuelgan de <code>tenants/{ese tenant}/</code>: el de otro da <code>403</code>. Si el usuario cambia de tenant, pedí un token nuevo.</p>
       <label>Token de mapa
         <textarea id="token" spellcheck="false" autocomplete="off" placeholder="eyJhbGciOiJIUzI1NiIs…"></textarea>
       </label>
@@ -514,7 +515,9 @@
               <tr><td><code>401</code> falta</td><td>La URL no trae <code>token</code>.</td><td>Agregar <code>&amp;token=…</code>.</td></tr>
               <tr><td><code>401</code> expiró</td><td>Pasó la hora.</td><td>Pedir otro a <code>/api/maps/token</code> y actualizar la <code>url</code> de la capa.</td></tr>
               <tr><td><code>401</code> inválido</td><td>La firma no cierra: el <code>MAP_TOKEN_SECRET</code> del tileserver no es igual a <code>GeoData__MapTokenSecret</code> de Geocore, o pegaste el JWT de Supabase.</td><td>Usar el token de <code>/api/maps/token</code>; si ya es ése, comparar los dos secretos.</td></tr>
-              <tr><td><code>403</code></td><td>Token firmado pero no es de tipo mapa.</td><td>Usar el de <code>/api/maps/token</code>.</td></tr>
+              <tr><td><code>403</code> <code>TENANT_AJENO</code></td><td>El COG es de otro tenant que el token.</td><td>Pedir el token con el <code>X-Tenant-ID</code> del dueño de esa capa. Si la key no empieza con <code>tenants/</code>, es una capa vieja y ya no se sirve.</td></tr>
+              <tr><td><code>403</code> <code>TOKEN_SIN_TENANT</code></td><td>Token emitido antes de M.8.1.</td><td>Pedir uno nuevo.</td></tr>
+              <tr><td><code>403</code> (otro)</td><td>Token firmado pero no es de tipo mapa.</td><td>Usar el de <code>/api/maps/token</code>.</td></tr>
               <tr><td><code>400</code></td><td>La <code>url</code> no está bajo <code>s3://terra-assets/</code> o tiene <code>..</code>. Es la defensa contra SSRF.</td><td>Revisar la ruta del COG.</td></tr>
               <tr><td><code>404</code></td><td>Sólo en <code>/cog/point</code>: el punto cae fuera del raster.</td><td>Nada: hacé click adentro.</td></tr>
               <tr><td><code>503</code></td><td>Al tileserver le falta <code>MAP_TOKEN_SECRET</code>.</td><td>Configurarlo en Railway.</td></tr>
@@ -727,10 +730,15 @@
   $("btn-pedir-token").addEventListener("click", function () {
     var nodo = $("res-token");
     var sb = ($("supabase").value || "").trim();
+    var tenant = ($("tenant").value || "").trim();
     if (!geocore() || !sb) return llenar(nodo, nota("warn", "Faltan la URL de Geocore o el access token de Supabase."));
+    // Desde M.8.1 el token es de UN tenant: Geocore pide X-Tenant-ID y el
+    // tileserver sólo sirve lo que cuelga de tenants/{ese tenant}/.
+    if (!tenant) return llenar(nodo, nota("warn", "Falta el X-Tenant-ID: el token de mapa es de un tenant."));
     guardarPrefs();
     llenar(nodo, chip("", "pidiendo…"));
-    pedir(geocore() + "/api/maps/token", { headers: { Authorization: "Bearer " + sb } }).then(function (res) {
+    pedir(geocore() + "/api/maps/token",
+      { headers: { Authorization: "Bearer " + sb, "X-Tenant-ID": tenant } }).then(function (res) {
       if (res.status === 200 && res.cuerpo && res.cuerpo.token) {
         $("token").value = res.cuerpo.token;
         mostrarToken();
@@ -1016,7 +1024,9 @@
         if (d.indexOf("expir") >= 0) return "El token venció. Pedí otro a /api/maps/token y volvé a pintar.";
         if (d.indexOf("falta") >= 0) return "La URL no lleva token.";
         return "El token no valida. ¿Es el de /api/maps/token y no el de Supabase? Si lo es, MAP_TOKEN_SECRET del tileserver no coincide con GeoData__MapTokenSecret de Geocore.";
-      case 403: return "El token está bien firmado pero no es de tipo map-access.";
+      case 403:
+        if (d.indexOf("tenant") >= 0) return "Ese COG es de otro tenant. El token lleva el tenant adentro y el tileserver sólo sirve tenants/{ese tenant}/. Si la key no empieza con tenants/, es una capa vieja y ya no se sirve.";
+        return "El token está bien firmado pero no es de tipo map-access.";
       case 404: return "404 en /cog/point es un punto fuera del raster. En un tile no debería aparecer: fuera del raster el tileserver devuelve un PNG transparente con 200.";
       case 503: return "Al tileserver le falta MAP_TOKEN_SECRET.";
       case 500: return "Error del lado del servidor, y a propósito no dice cuál: el mensaje crudo de GDAL puede traer direcciones internas. " +
@@ -1068,7 +1078,7 @@
       "  const extra = new URLSearchParams({",
       "    rescale: '" + r[0] + "," + r[1] + "',   // el COG es " + ((info && info.dtype) || "float32") + ": NDVI crudo, no colores",
       "    colormap_name: '" + cm + "',",
-      "    token,                     // GET /api/maps/token — dura 1 hora",
+      "    token,                     // GET /api/maps/token + X-Tenant-ID — dura 1 hora",
       "  })",
       "  return `${plantilla}&${extra}`",
       "}",
@@ -1099,7 +1109,7 @@
       "//   <CapaIndice plantilla={layer.tiles[0]} token={mapToken} bounds={...} />",
       "//",
       "// Renovar el token antes de que venza (vence a la hora):",
-      "//   const { token } = await api.get('/api/maps/token')   // cada ~50 min",
+      "//   const { token } = await api.get('/api/maps/token', { headers })  // + X-Tenant-ID, cada ~50 min",
       "//   setMapToken(token)",
       ""
     ].join("\n");
