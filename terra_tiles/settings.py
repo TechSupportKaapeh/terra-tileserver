@@ -88,18 +88,23 @@ def configure_gdal(settings: Settings) -> None:
     variables al cargarse; si se fijan después, se ignoran en silencio y las
     lecturas fallan con errores que no mencionan la causa.
 
-    También configura **boto3**, que no comparte ninguna variable con GDAL. Lo
-    usa `cogeo-mosaic` para leer un MosaicJSON guardado en el bucket
-    (`S3Backend` crea su cliente sin `endpoint_url`), así que sin esto apuntaría
-    a AWS de verdad en vez de a MinIO. Se fija acá, desde la misma `Settings`,
-    para que las dos vías de acceso al bucket no puedan divergir.
+    Fija también `AWS_ENDPOINT_URL_S3`, que es la forma en que el SDK de AWS
+    nombra el endpoint. La ponía para **boto3**, que hasta el 2026-09-24 usaba
+    `cogeo-mosaic` para leer un MosaicJSON del bucket; con el router `/mosaic`
+    borrado (`DECISIONS #64` del worker) ya no queda quien la lea desde este
+    servicio. **Se deja puesta a propósito**: es una variable de entorno de más,
+    y sacarla toca el único camino por el que GDAL llega a MinIO. Se saca cuando
+    alguien lo pruebe contra el deploy, no de paso en la tarea que borró el
+    router.
     """
     os.environ["AWS_ACCESS_KEY_ID"] = settings.minio_access_key
     os.environ["AWS_SECRET_ACCESS_KEY"] = settings.minio_secret_key
     os.environ["AWS_REGION"] = settings.aws_region
     os.environ["AWS_S3_ENDPOINT"] = settings.minio_endpoint
 
-    # boto3 quiere la URL completa con esquema; GDAL quiere host:puerto pelado.
+    # El SDK de AWS quiere la URL completa con esquema; GDAL quiere host:puerto
+    # pelado. Son dos formatos de lo mismo, y por eso se fijan juntos: así no
+    # pueden divergir. Ver el docstring por qué esta sigue acá sin boto3.
     esquema = "https" if settings.minio_secure else "http"
     os.environ["AWS_ENDPOINT_URL_S3"] = f"{esquema}://{settings.minio_endpoint}"
 

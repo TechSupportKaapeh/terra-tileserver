@@ -49,7 +49,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from rio_tiler.errors import PointOutsideBounds, TileOutsideBounds
 from titiler.core.factory import TilerFactory
-from titiler.mosaic.factory import MosaicTilerFactory
 
 from terra_tiles.arranque import registrar_arranque
 from terra_tiles.caching import CacheControlMiddleware
@@ -174,24 +173,17 @@ validar_ruta = crear_validador_de_ruta(settings.prefijo_valido, validador_token)
 cog = TilerFactory(path_dependency=validar_ruta)
 app.include_router(cog.router, prefix="/cog", tags=["COG"], dependencies=[verificar_token])
 
-# Endpoints MosaicJSON: componen varias pasadas al vuelo (DECISIONS #19 y #20).
-# `?url=` apunta acá a un MosaicJSON en el bucket, no a un COG.
+# El router `/mosaic` se borró el 2026-09-24 (`DECISIONS #64` del worker). Servía
+# MosaicJSON —componer varias pasadas al vuelo, `DECISIONS #19` y `#20`— y **no lo
+# usaba nadie**: desde el pipeline mensual el mapa de un rancho es un COG por
+# índice y por mes, que es lo que pide `/cog`.
 #
-# ⚠️ El validador de ruta acota el MosaicJSON, pero **no los assets que ese
-# documento lista adentro**: cogeo-mosaic los abre tal como vengan. Hoy eso está
-# contenido porque solo `worker-rw` puede escribir en el bucket, así que un
-# MosaicJSON solo puede aparecer ahí si lo puso el worker. Si alguna vez se
-# aceptan mosaicos de otro origen, hay que validar también los assets.
-#
-# **Desde M.8.1 esa grieta tiene una consecuencia más, y conviene decirla:** el
-# tenant se compara contra la URL del MosaicJSON, no contra sus assets, así que
-# un documento que listara COG de otro tenant los serviría. Sigue conteniéndolo
-# lo mismo —sólo el worker escribe, y escribe un mosaico por tenant—, pero ahora
-# lo que se saltearía es el aislamiento, no sólo el filtro anti-SSRF. Es el
-# hallazgo T-3 del mapeo OWASP.
-mosaico = MosaicTilerFactory(path_dependency=validar_ruta)
-app.include_router(mosaico.router, prefix="/mosaic", tags=["MosaicJSON"],
-                   dependencies=[verificar_token])
+# Se borra en vez de arreglarse, y eso cierra el hallazgo **T-3** del mapeo OWASP.
+# T-3 decía que el validador de ruta acota el MosaicJSON pero **no los assets que
+# ese documento lista adentro**: `cogeo-mosaic` los abre tal como vengan, así que
+# un documento que listara COG de otro tenant los serviría, salteando el
+# aislamiento que M.8.1 puso. Validar los assets era la otra salida; borrar la
+# superficie es más barato y no deja nada que se pueda volver a romper.
 
 
 # Lo ultimo del archivo, cuando los routers ya estan montados: recien aca el
