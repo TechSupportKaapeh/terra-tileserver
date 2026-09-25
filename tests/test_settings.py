@@ -68,12 +68,14 @@ class TestConfigureGdal:
         assert os.environ["AWS_S3_ADDRESSING_STYLE"] == "path"
         assert os.environ["AWS_VIRTUAL_HOSTING"] == "FALSE"
 
-    def test_configura_tambien_boto3_con_el_endpoint_de_minio(self, monkeypatch):
-        """boto3 no comparte NINGUNA variable con GDAL.
+    def test_fija_el_endpoint_en_el_formato_del_sdk_de_aws(self, monkeypatch):
+        """`AWS_ENDPOINT_URL_S3` es el mismo endpoint en el otro formato.
 
-        Lo usa cogeo-mosaic para leer un MosaicJSON del bucket (`S3Backend` crea
-        su cliente sin `endpoint_url`). Sin esto apuntaría a AWS de verdad, y el
-        fallo sería un timeout contra un bucket ajeno, no un error de config.
+        La ponía para boto3, que usaba cogeo-mosaic; con `/mosaic` borrado
+        (`DECISIONS #64` del worker) no queda quien la lea desde este servicio, y
+        **se deja puesta a propósito** — ver el docstring de `configure_gdal`.
+        El test la fija porque las dos formas del endpoint se escriben juntas: si
+        alguna vez divergen, es por acá que se nota.
         """
         monkeypatch.setenv("MINIO_ENDPOINT", "minio.railway.internal:9000")
         monkeypatch.setenv("MINIO_SECURE", "false")
@@ -83,7 +85,7 @@ class TestConfigureGdal:
         # GDAL lo quiere pelado, boto3 con esquema: son formatos distintos.
         assert os.environ["AWS_S3_ENDPOINT"] == "minio.railway.internal:9000"
 
-    def test_el_endpoint_de_boto3_respeta_minio_secure(self, monkeypatch):
+    def test_el_endpoint_del_sdk_respeta_minio_secure(self, monkeypatch):
         monkeypatch.setenv("MINIO_ENDPOINT", "bucket-x.up.railway.app")
         monkeypatch.setenv("MINIO_SECURE", "true")
         configure_gdal(Settings.from_env())

@@ -69,9 +69,15 @@ def cliente() -> TestClient:
     return TestClient(main.app, raise_server_exceptions=False)
 
 
-# Los dos routers montados, con el mismo control. `/mosaic` importa tanto como
-# `/cog`: es el que lee un MosaicJSON, y hasta M.8.1 cualquiera del bucket.
-RUTAS = ["/cog/info", "/mosaic/info"]
+# El único router montado. Hasta el 2026-09-24 eran dos: `/mosaic` se borró con
+# el hallazgo T-3 adentro (`DECISIONS #64` del worker), y `test_el_router_mosaic_
+# ya_no_existe` es el control de que se fue de verdad.
+#
+# Sigue siendo una lista y un `parametrize` de un elemento a propósito: el día
+# que se monte otro router, el que lo monte tiene que sumarlo acá y heredar los
+# cuatro controles de una línea. Con los tests escritos contra `/cog` a mano,
+# nacería sin ninguno.
+RUTAS = ["/cog/info"]
 
 
 @pytest.mark.parametrize("ruta", RUTAS)
@@ -133,6 +139,22 @@ def test_el_cog_propio_pasa_los_controles_y_recien_ahi_falla_al_abrirlo(cliente)
     r = cliente.get("/cog/info", params={"url": _key(TENANT), "token": _token()})
 
     assert r.status_code not in (400, 401, 403), r.text
+
+
+def test_el_router_mosaic_ya_no_existe(cliente):
+    """El control del borrado (`DECISIONS #64` del worker).
+
+    Sacar `/mosaic` de `RUTAS` deja verdes los tests de arriba **aunque el router
+    siga montado**: lo único que pasaría es que nadie lo mira. Este test falla si
+    vuelve, y con él volvería el hallazgo T-3 —el tenant se compara contra la URL
+    del MosaicJSON y no contra los assets que lista adentro—.
+
+    Se pide **con token**: un 401 también sería "no pasa", y probaría otra cosa.
+    Lo que tiene que decir es que la ruta no existe.
+    """
+    r = cliente.get("/mosaic/info", params={"url": _key(TENANT), "token": _token()})
+
+    assert r.status_code == 404
 
 
 def test_health_sigue_sin_pedir_token(cliente):

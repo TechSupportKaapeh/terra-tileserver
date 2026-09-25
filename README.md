@@ -102,13 +102,17 @@ Las capas **anteriores al pipeline mensual** tienen keys sin tenant
 (`parcelas/{id}/…`, `ranchos/{id}/…`) y por lo tanto **ya no se pueden servir**.
 Se borran con sus filas: Geocore `DECISIONS #43`.
 
-**Lo que este control no alcanza:** los assets listados *dentro* de un
-MosaicJSON. El tenant se compara contra la URL del documento, no contra lo que
-el documento lista, y `cogeo-mosaic` abre esos assets tal como vengan. Lo
-contiene lo mismo que contiene el hallazgo T-3 del mapeo OWASP —sólo `worker-rw`
-escribe en el bucket, así que un mosaico sólo aparece ahí si lo puso el worker—,
-pero desde M.8.1 lo que se saltearía es el aislamiento entre tenants, no sólo el
-filtro anti-SSRF.
+**Lo que este control no alcanzaba, y ya no hace falta que alcance:** los assets
+listados *dentro* de un MosaicJSON. El tenant se comparaba contra la URL del
+documento y no contra lo que el documento lista, así que un mosaico que listara
+COG de otro tenant los habría servido — el hallazgo **T-3** del mapeo OWASP.
+
+**Se cerró el 2026-09-24 borrando el router `/mosaic`** (`DECISIONS #64` del
+worker), que era superficie muerta: desde el pipeline mensual el mapa de un
+rancho es un COG por índice y por mes, y nadie pedía un MosaicJSON. Es la misma
+cura que W-3: cerrar un hallazgo borrando la superficie en vez de reimplementar
+un control que después hay que mantener. **El único router montado es `/cog`**, y
+un test comprueba que `/mosaic/info` dé 404.
 
 ---
 
